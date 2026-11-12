@@ -1,0 +1,7 @@
+# Operating protocol
+
+Read the whole brief. Initialize with `bin/autoresearch init` only after establishing a meaningful, safe empirical question and an explicit bounded resource policy. If missing or contradictory, record a blocker and stop. Policy extraction is an agent judgment, not a security boundary; deterministic checks enforce only recorded fields. Never revise policy silently.
+
+Loop: recover state, brief snapshot/hash, policy, protocol, ledger, budget, and jobs; propose a justified hypothesis, changed/fixed variables and resource request; create isolated experiment directory and manifest with command, hashes, inputs, seeds and parent; validate; execute only through `bin/research-job`; preserve logs; validate nonempty measured result; analyze controls/uncertainty; record failures too; atomically update state/ledger/findings/report and next step. Baseline precedes comparisons. Keep evaluation stable or version protocol. Continue until budget/stop/blocker/allocation end. Do not ask interactive research questions; record blockers. Bound retries. Never claim computation without executed output.
+
+Commands: `bin/autoresearch check`, `init`, `status`, `start`, `stop`, `report`, `smoke`. `start` prints this workflow for the already-running agent; that live agent maintains the loop. Its exit pauses the loop. Jobs must use research-job; default is local only in an appropriate allocation. Separate Slurm submissions require explicit brief authorization and complete validated policy. Reconcile active jobs on resume; never duplicate them.
