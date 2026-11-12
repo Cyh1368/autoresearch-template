@@ -19,7 +19,11 @@ def validate_policy(p):
  return p
 def init():
  brief=(ROOT/'RESEARCH_BRIEF.md').read_text();
- if '[Question' in brief or '[Systems' in brief: raise ValueError('Brief incomplete')
+ # Required-section placeholders from the brief template must be replaced by the human.
+ # Section 4 (allowed resources) has no bracket placeholder; policy derivation from it is
+ # the agent's judgment and is enforced by validate_policy, not by this heuristic.
+ for marker in ('[Question','[Systems','[Scope'):
+  if marker in brief: raise ValueError('Brief incomplete: required section still holds placeholder '+marker+'...')
  pol=json.loads(pathlib.Path('policy.json').read_text()); validate_policy(pol)
  cid=time.strftime('%Y%m%dT%H%M%S')+'-'+uuid.uuid4().hex[:8]; d=CAMP/cid; d.mkdir(parents=True,exist_ok=False)
  (d/'brief.snapshot.md').write_text(brief); atomic(d/'policy.json',pol); atomic(d/'state.json',{'id':cid,'status':'ready','created':time.time(),'brief_sha256':digest(brief),'attempts':0,'jobs':[]})
