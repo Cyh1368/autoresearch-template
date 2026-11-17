@@ -2,6 +2,356 @@
 
 A transparent starter for computational research controlled by one natural-language brief. The live coding agent owns the iterative loop; the CLI provides deterministic checks and state helpers and does not launch a coding agent in the background. The policy file is agent-derived and must be reviewed against the brief; language interpretation is not a security boundary.
 
+## The Reviewer-Researcher Loop
+
+I'm currently using this autoresearch system with a cheap model (like Qwen 3.8) and an expensive model (GPT-6 Astra). The latter is responsible for generating the initial research proposal and the reviews. 
+
+### Initial Research Proposal
+
+This LLM should operate *outside* this repository.
+
+```
+Research direction:
+[INSERT IDEA OR QUESTION]
+
+Available resources and explicit permissions:
+[INSERT COMPUTE, TIME, STORAGE, NETWORK, DATA, AND OTHER AUTHORIZATIONS]
+
+Existing assets and relevant work:
+[INSERT AVAILABLE PAPERS, CODE, DATA, MODELS, AND PRELIMINARY RESULTS]
+
+You are designing a research campaign for a capable autonomous coding agent.
+Your output will be its research brief. The agent can implement experiments,
+analyze results, and adapt its approach, but your brief must give it a strong
+scientific starting point.
+
+Generate your brief as a markdown document named RESEARCH_BRIEF.md.
+
+Write a focused, executable research brief that helps the agent discover something
+consequential and defensible efficiently. Do not optimize for an impressive-sounding
+proposal or assume the original idea will succeed.
+
+Before writing, investigate the closest relevant work using primary sources where
+access is available. Verify that proposed models, datasets, and software exist and
+support the required experiment. Distinguish verified facts, assumptions, and open
+questions. Never invent citations or resource availability. If browsing is
+unavailable, mark literature and feasibility claims that require verification.
+
+The brief must establish the following:
+
+1. A consequential question
+Explain who would use the result and what scientific or practical decision it
+would change. Identify the precise gap left by the closest existing approaches.
+Distinguish a new mechanism, a useful method, and an informative empirical boundary.
+State what would remain valuable if the proposed method fails.
+
+2. A falsifiable starting hypothesis
+Describe the proposed mechanism and at least one credible competing explanation.
+Separate the phenomenon to understand from the particular method initially
+suggested. Give the agent freedom to abandon that method while preserving the
+central research question.
+
+3. A minimal, discriminating first experiment
+Specify the smallest experiment that can establish whether the question has
+meaningful signal and the proposed approach has headroom.
+Explain what different outcomes would imply and what decision each would trigger.
+Where an oracle or privileged-information diagnostic is useful, specify exactly
+what it reveals and what it cannot establish. Do not confuse oracle feasibility
+with an implementable solution.
+
+4. A credible experimental design
+Name the reference and strongest relevant simple baselines, explaining their roles.
+Define what information each method may access and when it becomes available.
+Identify the independent experimental unit.
+Vary the factors needed to distinguish the competing explanations independently.
+Include positive controls, negative controls, irrelevant interventions, and
+preservation checks where appropriate.
+Require verification that the reference can solve the task and that the workload
+can distinguish success from failure before interpreting method comparisons.
+
+5. Evaluation tied to the claim
+Specify primary outcomes and meaningful quality–cost comparisons.
+Keep correctness, agreement with a reference, internal-state similarity, and
+practical usefulness separate when they are different.
+For efficiency claims, require actual end-to-end measurement and account for
+setup, retained information, data movement, and other material overhead.
+Identify implementation checks needed to trust the measurements.
+
+6. Development and confirmation
+Describe which decisions may be tuned on development data.
+Reserve confirmation that challenges the method's assumptions: held-out structures,
+conditions, workloads, or systems, rather than merely additional random examples.
+Set practical thresholds using development evidence before confirmation is exposed.
+Require uncertainty at the true replication unit.
+Do not prescribe arbitrary sample sizes or statistical procedures without a reason.
+
+7. An economical research sequence
+Organize the campaign into a few conditional stages:
+measurement validation → baseline/headroom → minimal method or diagnostic →
+confirmation.
+Give promotion, pivot, and stop conditions.
+Prefer cheap experiments that eliminate explanations before large sweeps.
+Introduce additional models, scale, and complex methods only when they resolve an
+important uncertainty.
+A rigorous negative finding is an acceptable endpoint.
+
+8. Operational boundaries
+Repeat only permissions actually supplied by the human.
+Separate authorized ceilings from recommended working budgets.
+Flag missing or contradictory authorizations explicitly; do not resolve them by
+granting access.
+Allow autonomous scientific decisions within the authorized envelope.
+
+9. Evidence and reporting
+Require pinned inputs and software, exact commands, per-item results, failed trials,
+protocol amendments, and claim-to-evidence traceability.
+Require the final account to identify the simplest competitive baseline, failure
+regimes, unsupported claims, and the practical decision supported by the evidence.
+
+Write the final brief in these sections:
+Research question; Intended contribution and closest work; Experimental setting;
+First diagnostic; Baselines and controls; Evaluation and confirmation;
+Conditional research sequence; Resources and permissions; Limitations;
+Evidence and reporting.
+
+Be concrete about the scientific distinctions that matter. Leave implementation
+choices to the coding agent unless they are essential to validity.
+Do not create an exhaustive benchmark suite or a rigid experiment list.
+End with the first experiment and the decision it is intended to resolve.
+```
+
+### Autoresearch Agent Initial Prompt
+
+Clone this template, replace RESEARCH_BRIEF.md with what the expensive LLM generated, and start the auto research with the prompt below. 
+
+```
+Read AGENTS.md, AGENT_INSTRUCTIONS.md, and the complete RESEARCH_BRIEF.md. Derive and validate a bounded policy, initialize only if safe, then execute the documented research loop autonomously. Do not start a real campaign unless the brief is complete and authorizes it. Save your final paper in /documents,
+```
+
+### Review agent prompt
+
+Run this with the expensive model in this codebase.
+
+```
+You are a demanding, constructive research reviewer advising an autonomous research
+agent. Your review should help the agent reach a more important and defensible
+result with less wasted work.
+
+Current manuscript is in /documents.
+Results, protocols, code, and experiment records are in this codebase.
+
+Evaluate the work actually supported by the available evidence. State what you
+inspected and what remains unaudited. Do not treat a manuscript's description of
+an experiment as independent verification that it ran correctly.
+
+Your job is to identify the most consequential unresolved questions and propose
+experiments that discriminate between answers. Do not simply request more data,
+more models, or more benchmarks.
+
+Assess:
+
+1. Contribution
+What is the strongest potentially important finding? How does it differ from the
+closest prior work? Is the contribution a method, mechanism, empirical boundary,
+measurement correction, or useful negative result?
+
+Verify consequential novelty claims against primary sources when possible.
+Do not mistake a new combination of familiar components for demonstrated impact.
+
+2. Validity
+For each central conclusion, consider:
+- an implementation or scoring artifact;
+- a workload confound;
+- a simpler explanation;
+- privileged information unavailable to a feasible method;
+- an unfair or weak baseline;
+- selection, leakage, or dependence among observations.
+
+Identify which alternatives remain plausible. Distinguish an observed association
+from a mechanism established by intervention.
+
+3. Measurement and inference
+Check task validity, reference performance, endpoint definitions, independent sample
+counts, pairing, clustering, selection, and uncertainty.
+
+Matching accuracy does not establish matching distributions. A nonsignificant
+difference does not establish equivalence. A numerical diagnostic does not by
+itself establish behavioral importance.
+
+Question claims of exactness, generality, and constant cost. Ask for checks targeted
+to the execution paths and regimes supporting those claims.
+
+4. Operational value
+Does the method have access only to permitted information at decision time?
+Does its benefit survive realistic selection, preprocessing, state construction,
+metadata, transfer, and fallback costs?
+
+Distinguish oracle demonstrations, feasible implementations, proxy savings, and
+measured end-to-end improvements.
+
+5. Generalization and scope
+Which claims survive across the tested conditions? Which depend on model, scale,
+task structure, workload, or numerical implementation?
+
+Check whether confirmation meaningfully challenges the explanation, rather than
+repeating the development setting.
+
+Write an actionable review:
+
+A. Give a concise assessment and name the strongest supported contribution.
+
+B. Rank a small number of major issues by how much they threaten validity or value.
+For each issue provide:
+- the exact claim at risk;
+- the evidence or ambiguity causing concern;
+- at least one competing explanation;
+- the smallest discriminating experiment or reanalysis;
+- what outcomes would support, narrow, or reject the claim.
+
+C. Propose a prioritized research program.
+Separate:
+- corrections required before existing results can be trusted;
+- decisive experiments required for the central contribution;
+- optional extensions.
+
+Respect the remaining budget. Where possible, use existing per-item results before
+requesting new computation. Prefer orthogonal interventions and matched comparisons
+over broad sweeps.
+
+D. State branch-specific stop and pivot conditions.
+If an oracle diagnostic shows insufficient headroom, say which method-development
+branch should close. If a claimed mechanism fails, identify whether a narrower
+empirical result remains valuable.
+
+E. Describe the strongest claim the study could responsibly make now, and what
+additional evidence would justify a stronger claim.
+
+If reviewing an early pilot, emphasize measurement validity, headroom, and experiment
+choice. If reviewing a mature manuscript, additionally audit literature positioning,
+statistical language, operational value, and consistency across abstract, tables,
+and limitations.
+
+Do not prescribe favorable outcomes. Do not require every suggested experiment.
+Do not claim the work is publishable merely because a checklist is completed.
+Make the review scientifically specific enough that the agent can act without
+asking you to design the experiments again.
+```
+
+### Autoresearch Agent Continuation
+
+```
+Continue the existing research campaign using the newest review in /documents.
+
+Your objective is to resolve the review's most consequential scientific uncertainties
+and produce the strongest auditable result the evidence supports within the remaining
+authorized resources. A useful negative result or a narrowed contribution is an
+acceptable outcome.
+
+First read the repository's operating instructions, complete research brief, review,
+current protocol, findings, experiment ledger, resource policy, budget, and handoff.
+Recover and reconcile active jobs before submitting anything. Do not initialize a
+new campaign, duplicate jobs, or expand permissions merely because this prompt asks
+you to continue.
+
+Then proceed autonomously:
+
+1. Turn the review into a research decision plan
+For each major issue, record:
+- the claim being challenged;
+- what the reviewer believes is missing;
+- whether existing evidence resolves it;
+- the smallest additional analysis or experiment needed;
+- competing predictions;
+- the decision that each outcome would trigger.
+
+Distinguish measurement defects from scientific uncertainty and presentation issues.
+Fix defects that undermine interpretation before collecting more results.
+
+Do not accept every reviewer assertion automatically. Check it against the evidence.
+If you disagree, document a precise, supported response.
+
+2. Prioritize the decisive work
+Identify the central contribution worth preserving or testing. Rank proposed work by
+its ability to change the scientific conclusion relative to cost and effort.
+
+Run cheap reanalyses and falsification tests before expensive extensions. Avoid
+developing a complicated method when a diagnostic can first determine whether it
+has enough headroom.
+
+Use the review as scientific guidance, not as an obligation to execute every suggested
+experiment or to reproduce the reviewer's preferred explanation.
+
+3. Freeze the relevant decisions before scoring
+For each new experiment, record the hypothesis, changed and fixed factors, baselines,
+information available to each arm, primary endpoints, replication unit, analysis,
+practical tolerances, inclusion rules, and branch decision criteria.
+
+Use development measurements to calibrate choices where necessary. Freeze them before
+opening confirmation results. Record amendments, failed runs, and exposure to held-out
+data. Never silently replace an unsuccessful endpoint or redefine success.
+
+4. Validate the measurement pipeline
+Run a small end-to-end check before large jobs. Confirm that the task is informative,
+the reference behaves as expected, scoring matches the intended endpoint, state is
+isolated across measurements, and numerical paths satisfy any claimed tolerances.
+
+Investigate surprising results with targeted controls. Preserve failed and invalid
+runs, label their status, and identify which conclusions they invalidate.
+
+5. Execute, analyze, and adapt
+Use the authorized execution workflow and record commands, versions, hashes, inputs,
+seeds, job identities, raw measurements, and resource usage.
+
+Analyze paired outcomes and uncertainty at the correct independent unit. Report all
+relevant strata, including failed capability or headroom gates. Clearly distinguish
+exploration from confirmation and oracle interventions from feasible methods.
+
+After each decisive result, update the research plan:
+- continue if the prerequisite evidence supports the next stage;
+- narrow or revise the explanation if alternatives survive;
+- close a branch when its stopping rule is met;
+- confirm an informative negative result when that is the best use of the budget.
+
+Do not repeatedly run variants simply to obtain a positive result.
+
+6. Test practical value and generalization
+For a surviving method, evaluate the real decision-time inputs and full operational
+cost against strong baselines. Report quality–cost tradeoffs and fallback behavior.
+
+Use confirmation that challenges the proposed explanation. Scope conclusions to the
+systems, tasks, scales, and conditions actually tested.
+
+7. Keep conclusions synchronized with evidence
+Maintain a claim-to-evidence record and explicitly mark claims that are confirmed,
+narrowed, withdrawn, or unresolved.
+
+Update current summaries so superseded findings do not remain presented as established
+results. Preserve the historical record. Ensure the abstract, tables, discussion,
+and reviewer response describe the same endpoints and supported scope.
+
+8. Finish with an evidence-based handoff
+Produce a response organized by the review's major issues:
+- what changed;
+- which evidence addresses the concern;
+- what conclusion is now justified;
+- what remains unresolved and why.
+
+Include the strongest supported contribution, important negative results, limitations,
+artifact locations, remaining budget, and active-job status.
+
+Make routine scientific and engineering decisions yourself and document them.
+Do not ask the user to choose ranks, baselines, analyses, or the next experiment when
+the available evidence supports a reasonable choice.
+
+If a necessary action lacks authorization, record the precise blocker and continue
+independent authorized work where possible. Never reinterpret scientific autonomy
+as permission to obtain new resources.
+
+Continue until the decisive research program is resolved, a legitimate blocker
+prevents further useful progress, or the authorized budget/allocation ends. Do not
+continue indefinitely in pursuit of a promised “publishable” outcome.
+```
+
 ## How it works
 
 The system splits responsibility between a human brief, the live coding agent (the
