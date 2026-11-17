@@ -1,14 +1,18 @@
-# Autoresearch template
+# The Reviewer-Researcher Loop
 
-A transparent starter for computational research controlled by one natural-language brief. The live coding agent owns the iterative loop; the CLI provides deterministic checks and state helpers and does not launch a coding agent in the background. The policy file is agent-derived and must be reviewed against the brief; language interpretation is not a security boundary.
+This is a resource-efficient auto-research template for computational research.
 
-## The Reviewer-Researcher Loop
+You need:
 
-I'm currently using this autoresearch system with a cheap model (like Qwen 3.8) and an expensive model (GPT-6 Astra). The latter is responsible for generating the initial research proposal and the reviews. 
+- a rough research idea. Chat with strong LLMs until you find it satisfactory.
+- a agent coding harness
+- a computing environment for the cheap model (to, for example, submit Slurm jobs)
+- a cheap model (like Qwen 3.8) responsible for working on the research problem for hours
+- an expensive model (GPT-6 Astra) responsible for generating the initial research proposal and the reviews. 
 
 ### Initial Research Proposal
 
-This LLM should operate *outside* this repository.
+This LLM should operate *outside* this repository. Ideally, this is the same LLM that you used to come up with the satisfactory research idea.
 
 ```
 Research direction:
@@ -122,7 +126,7 @@ End with the first experiment and the decision it is intended to resolve.
 
 ### Autoresearch Agent Initial Prompt
 
-Clone this template, replace RESEARCH_BRIEF.md with what the expensive LLM generated, and start the auto research with the prompt below. 
+Clone this template, replace RESEARCH_BRIEF.md with what the external LLM generated, and start the auto-research with the prompt below. 
 
 ```
 Read AGENTS.md, AGENT_INSTRUCTIONS.md, and the complete RESEARCH_BRIEF.md. Derive and validate a bounded policy, initialize only if safe, then execute the documented research loop autonomously. Do not start a real campaign unless the brief is complete and authorizes it. Save your final paper in /documents,
@@ -399,6 +403,8 @@ experiment-ledger.jsonl / findings.md  →  bin/autoresearch report
 
 ### Commands
 
+These are optional to use.
+
 | Command | Effect |
 | --- | --- |
 | `bin/autoresearch check` | Report Python version and whether `sbatch`/`squeue` are available. |
@@ -425,7 +431,7 @@ repository root. `current()` selects the most recent `campaign/<id>` by name.
 - `examples/smoke_test/` — offline demo (writes to a gitignored `output/`), not research.
 - `slurm/agent-session.example.sh` — illustrative session notes only.
 
-## Quick start
+## Quick start for Yale students
 
 1. Copy this directory to the campaign project and edit only `RESEARCH_BRIEF.md`.
 2. Obtain a Bouchet agent-partition session under current [YCRC Bouchet documentation](https://docs.ycrc.yale.edu/clusters/bouchet/). Each agent-partition job is limited to one CPU and 8 GB; check documentation for current limits. Within the session, consult local instructions and load `local-coding-agents` as documented.
