@@ -5,7 +5,7 @@ from loop.config import load_config
 from loop.errors import GitError, LoopBlock, ProviderError
 from loop.git_sync import GitSync
 from loop.orchestrator import run_loop, submit_manuscript
-from loop.parse import parse_decision, parse_json_object, parse_progress
+from loop.parse import combine_reviews, parse_decision, parse_json_object, parse_progress
 from loop.provider import Provider
 from loop.cli import main
 from loop.usage import read_usage
@@ -59,15 +59,18 @@ class Agent:
 
 
 class HTTP:
-    def __init__(self, decisions=None, progress=False, fail_status=None):
+    def __init__(self, decisions=None, progress=False, fail_status=None, fail_on_call=1):
         self.decisions = list(decisions or ["revise"])
         self.progress = progress
         self.fail_status = fail_status
+        self.fail_on_call = fail_on_call
         self.calls = []
+        self._n = 0
 
     def __call__(self, method, url, headers, body, timeout):
+        self._n += 1
         self.calls.append({"method": method, "url": url, "headers": headers, "body": body})
-        if self.fail_status:
+        if self.fail_status and self._n == self.fail_on_call:
             status = self.fail_status
             self.fail_status = None
             return status, {}, b'{"error":"upstream"}'
@@ -153,10 +156,19 @@ class LoopTests(unittest.TestCase):
         agent = Agent(["Paper one is ready."])
         result = self.drive(agent, http)
         self.assertEqual(result["status"], "accepted")
+        self.assertEqual(result["reason"], "accepted by three reviewers at version 1")
         self.assertEqual(agent.calls, 1)
-        self.assertEqual(len(http.calls), 1)
+        self.assertEqual(len(http.calls), 3)
         self.assertIn("Paper one is ready.", bodies(http))
         self.assertNotIn(CANARY, bodies(http))
+        self.assertNotIn("Independent review", http.calls[0]["body"].decode())
+        self.assertIn("Independent review 2", http.calls[1]["body"].decode())
+        self.assertIn("Independent review 3", http.calls[2]["body"].decode())
+        for call in http.calls:
+            self.assertIn("Paper one is ready.", call["body"].decode())
+        remark = (self.root / "documents" / "REMARK.md").read_text(encoding="utf-8")
+        self.assertIn("## Reviewer 1 (accept)", remark)
+        self.assertIn("## Reviewer 3 (accept)", remark)
         self.assertEqual(http.calls[0]["url"], "https://openrouter.ai/api/v1/chat/completions")
         self.assertEqual(http.calls[0]["headers"]["Authorization"], "Bearer " + SECRET)
         self.assertNotIn(SECRET, (self.root / "usage" / "api-usage.jsonl").read_text())
@@ -177,10 +189,12 @@ class LoopTests(unittest.TestCase):
         result = self.drive(agent, http)
         self.assertEqual(result["status"], "accepted")
         self.assertEqual(agent.calls, 2)
-        self.assertEqual(len(http.calls), 2)
+        self.assertEqual(len(http.calls), 4)
         self.assertIn("UNIQUE_RESPONSE_ALPHA", http.calls[0]["body"].decode())
-        self.assertNotIn("UNIQUE_RESPONSE_ALPHA", http.calls[1]["body"].decode())
-        self.assertIn("unchanged", http.calls[1]["body"].decode())
+        for call in http.calls[1:]:
+            decoded = call["body"].decode()
+            self.assertNotIn("UNIQUE_RESPONSE_ALPHA", decoded)
+            self.assertIn("unchanged", decoded)
         self.assertNotIn(CANARY, bodies(http))
         self.assertIn("Review text for the manuscript.", agent.prompts[1])
         self.assertTrue((self.root / "documents" / "REMARK.md").is_file())
@@ -248,9 +262,10 @@ class LoopTests(unittest.TestCase):
         http = HTTP(decisions=["accept"], fail_status=500)
         result = self.drive(Agent(["Recovered paper."]), http)
         self.assertEqual(result["status"], "accepted")
-        self.assertEqual(len(http.calls), 2)
+        self.assertEqual(len(http.calls), 4)
         rows = read_usage(self.root, load_config(self.root, self.env))
-        self.assertEqual([row["status"] for row in rows], ["error", "ok"])
+        self.assertEqual([row["status"] for row in rows], ["error", "ok", "ok", "ok"])
+        self.assertEqual([row["operation"] for row in rows], ["review", "review", "confirmation", "confirmation"])
 
     def test_brief_change_blocks(self):
         http = HTTP()
@@ -411,6 +426,78 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(result["status"], "blocked")
         self.assertIn("paper.md", result["reason"])
         self.assertEqual(http.calls, [])
+
+    def test_split_panel_returns_the_three_reviews(self):
+        http = HTTP(decisions=["accept", "revise", "accept"])
+        agent = Agent(["Panel paper one."])
+        result = self.drive(agent, http, max_cycles=1)
+        self.assertEqual(result["status"], "running")
+        self.assertEqual(agent.calls, 1)
+        self.assertEqual(len(http.calls), 3)
+        review = (self.root / "documents" / "REVIEW.md").read_text(encoding="utf-8")
+        self.assertIn("## Reviewer 1 (accept)", review)
+        self.assertIn("## Reviewer 2 (revise)", review)
+        self.assertIn("## Reviewer 3 (accept)", review)
+        self.assertFalse((self.root / "documents" / "REMARK.md").exists())
+        meta = json.loads((self.root / "documents" / "reviews" / "v001.json").read_text(encoding="utf-8"))
+        self.assertEqual(meta["decision"], "revise")
+        self.assertEqual([item["decision"] for item in meta["panel"]], ["accept", "revise", "accept"])
+
+    def test_next_rejection_stays_a_single_review(self):
+        http = HTTP(decisions=["accept", "revise", "accept", "revise"])
+        agent = Agent(["First panel paper.", "Second paper after the panel."])
+        result = self.drive(agent, http, max_cycles=2)
+        self.assertEqual(result["status"], "running")
+        self.assertEqual(agent.calls, 2)
+        self.assertEqual(len(http.calls), 4)
+        self.assertIn("## Reviewer 2 (revise)", agent.prompts[1])
+        review = (self.root / "documents" / "REVIEW.md").read_text(encoding="utf-8")
+        self.assertNotIn("## Reviewer 2", review)
+        self.assertIn("Review text for the manuscript.", review)
+
+    def test_approved_revision_asks_two_more_reviewers(self):
+        http = HTTP(decisions=["accept", "revise", "accept", "accept"])
+        agent = Agent(["First panel paper.", "Revised paper."])
+        result = self.drive(agent, http)
+        self.assertEqual(result["status"], "accepted")
+        self.assertEqual(agent.calls, 2)
+        self.assertEqual(len(http.calls), 6)
+        remark = (self.root / "documents" / "REMARK.md").read_text(encoding="utf-8")
+        self.assertIn("## Reviewer 3 (accept)", remark)
+        self.assertFalse((self.root / "documents" / "REVIEW.md").exists())
+
+    def test_resume_finishes_confirmations_without_repeating_the_first_reviewer(self):
+        http = HTTP(decisions=["accept"], fail_status=401, fail_on_call=2)
+        agent = Agent(["Snapshot paper stays put."])
+        first = self.drive(agent, http)
+        self.assertEqual(first["status"], "blocked")
+        self.assertEqual(len(http.calls), 2)
+        second = self.drive(agent, http)
+        self.assertEqual(second["status"], "accepted")
+        self.assertEqual(agent.calls, 1)
+        rows = read_usage(self.root, load_config(self.root, self.env))
+        self.assertEqual(
+            [(row["operation"], row["status"]) for row in rows],
+            [
+                ("review", "ok"),
+                ("confirmation", "error"),
+                ("confirmation", "ok"),
+                ("confirmation", "ok"),
+            ],
+        )
+        self.assertIn("Snapshot paper stays put.", http.calls[-1]["body"].decode())
+
+    def test_panel_accepts_only_when_all_three_accept(self):
+        reviews = [
+            {"role": "primary", "decision": "accept", "summary": "a", "review_markdown": "one"},
+            {"role": "confirmation", "decision": "accept", "summary": "b", "review_markdown": "two"},
+            {"role": "confirmation", "decision": "revise", "summary": "c", "review_markdown": "three"},
+        ]
+        combined = combine_reviews(reviews)
+        self.assertEqual(combined["decision"], "revise")
+        self.assertIn("## Reviewer 2 (accept)", combined["review_markdown"])
+        reviews[2]["decision"] = "accept"
+        self.assertEqual(combine_reviews(reviews)["decision"], "accept")
 
     def test_fenced_json(self):
         parsed = parse_json_object('```json\n{"decision":"accepted","summary":"ok","review_markdown":"Full."}\n```')

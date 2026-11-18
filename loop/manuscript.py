@@ -81,7 +81,7 @@ def snapshot(root, cfg, number, manuscript, response_text, note):
     return manifest
 
 
-def review_user_message(manuscript, response_text, note):
+def review_user_message(manuscript, response_text, note, reviewer_index=None):
     parts = [
         "Attached evidence is the manuscript and, when present, the author response.",
         "",
@@ -89,6 +89,14 @@ def review_user_message(manuscript, response_text, note):
         "",
         manuscript.paper,
     ]
+    if reviewer_index:
+        parts = [
+            (
+                f"Independent review {reviewer_index}. "
+                "No other review of this manuscript is included. Judge it on its own."
+            ),
+            "",
+        ] + parts
     if response_text is not None:
         parts.extend(["", "Author response:", "", response_text])
     elif note:

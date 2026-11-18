@@ -1,6 +1,6 @@
 # The reviewer-researcher loop
 
-This is a template for a computational research campaign. You write `RESEARCH_BRIEF.md`, open your coding agent, and paste one prompt. The agent runs the experiments and writes the manuscript. When a version is ready, the agent runs `bin/autoresearch submit`. That command sends the manuscript to a strong model, saves the review in `documents/`, and pushes. The agent sleeps 600 seconds, reads that review, and continues in the same session.
+This is a template for a computational research campaign. You write `RESEARCH_BRIEF.md`, open your coding agent, and paste one prompt. The agent runs the experiments and writes the manuscript. When a version is ready, the agent runs `bin/autoresearch submit`. That command sends the manuscript to a strong model, saves the review in `documents/`, and pushes. One reviewer reads it first. If that reviewer accepts, two more reviewers must also accept before the campaign finishes. Otherwise the agent sleeps 600 seconds, reads the review, and continues in the same session.
 
 The brief is the only per-campaign input. The reviewer API key is one-time setup. The default reviewer is OpenRouter model `openai/gpt-6-sol` (GPT-6 Sol). You choose the coding agent and drive it yourself.
 
@@ -51,14 +51,14 @@ pi
 - `documents/REVIEW.md` is the latest request for changes. `documents/REMARK.md` is the accept note. Only one of those two is kept.
 - `documents/loop-state.json` is the stop state.
 
-6. When the agent decides the version is written, it runs `bin/autoresearch submit` and waits. That command pulls, sends the manuscript to the strong model, writes the review, commits, and pushes. It returns when the files are on disk. The agent then runs `sleep 600` and reads the file named in the command's last lines.
+6. When the agent decides the version is written, it runs `bin/autoresearch submit` and waits. That command pulls, sends the manuscript to one reviewer, and, only if that reviewer accepts, sends it to two more. It writes the review, commits, and pushes. It returns when the files are on disk. The agent then runs `sleep 600` and reads the file named in the command's last lines.
 
 7. Read the end of the `submit` output.
 
 - `Sleep 600 seconds, then read documents/REVIEW.md and continue.` The review asked for changes. After the sleep the agent writes the next version in the same session, including a new `documents/response.md`.
-- `Read documents/REMARK.md and stop.` The paper was accepted. The session is finished.
+- `Read documents/REMARK.md and stop.` All three reviewers accepted. The session is finished.
 - `This campaign is stalled. Stop.` The last three versions did not make significant progress. The session is finished.
-- `A person has to clear this block.` The command failed. The reason is in `documents/loop-state.json`. Fix that, then let the agent run `bin/autoresearch submit` again. A saved snapshot with an empty decision is reviewed on that retry. The same manuscript is not sent twice.
+- `A person has to clear this block.` The command failed. The reason is in `documents/loop-state.json`. Fix that, then let the agent run `bin/autoresearch submit` again. A saved snapshot with an empty decision and no finished panel is reviewed on that retry. Confirmation reviews that already returned are kept. A finished version is not reviewed again.
 
 Spend is `bin/autoresearch usage` in another shell. `--no-live` skips the network lookup.
 
@@ -71,8 +71,10 @@ agent works in the open terminal
         |  campaign/<id>/
         v
 agent runs bin/autoresearch submit
-        |  strong model
-        |  documents/REVIEW.md or documents/REMARK.md
+        |  one reviewer
+        |  on accept, two more reviewers
+        |  all three accept -> documents/REMARK.md
+        |  otherwise -> documents/REVIEW.md
         |  git commit and git push
         v
 agent runs sleep 600
@@ -81,7 +83,11 @@ agent runs sleep 600
         +-- REVIEW.md --> next version in the same session
 ```
 
-`submit` sends `documents/paper.md` and, when that file is new, `documents/response.md`. An unchanged response is withheld. Both texts are copied to `documents/versions/vNNN/` with `manifest.json`. The manifest sets `experimental_data_attached` to false. Code, logs, datasets, and campaign records stay out of the request. The review instruction is `loop/prompts/review.md`. Once three revise decisions exist, the same `submit` also calls `loop/prompts/progress.md` on those three manuscripts. The pull is `git pull --rebase --autostash` when the branch has an upstream. With no upstream, `submit` still commits and pushes. Leave `git push`, `git pull`, and `git reset` to `submit`.
+`submit` sends `documents/paper.md` and, when that file is new, `documents/response.md`. An unchanged response is withheld. Both texts are copied to `documents/versions/vNNN/` with `manifest.json`. The manifest sets `experimental_data_attached` to false. Code, logs, datasets, and campaign records stay out of the request. The review instruction is `loop/prompts/review.md`.
+
+One reviewer reads that packet first. A rejection ends the round and is stored as `revise`. An acceptance does not finish the campaign. `submit` then makes two more calls with the same instruction and the same packet. Each of those calls is labeled as an independent review and does not include the other reviews. The campaign is accepted only when both accept. `submit` writes all three remarks to `documents/REMARK.md`. If either confirmation reviewer rejects, `submit` writes all three reviews to `documents/REVIEW.md` and the agent continues. The next version starts with one reviewer again. Two further reviewers are called only after that reviewer accepts.
+
+Once three revise decisions exist, the same `submit` also calls `loop/prompts/progress.md` on those three manuscripts. A split panel counts as one revise. The pull is `git pull --rebase --autostash` when the branch has an upstream. With no upstream, `submit` still commits and pushes. Leave `git push`, `git pull`, and `git reset` to `submit`.
 
 On Bouchet, do this inside the agent-partition session you already use for Pi. Load `local-coding-agents` the same way you do for an interactive `pi`. The agent session is one CPU and 8 GB. `submit` runs in that session and does not start another Slurm job.
 
@@ -98,13 +104,13 @@ The subprocess has to write `documents/paper.md` and exit. If it exits without a
 
 ## When submit stops
 
-The review scores quality, clarity, significance, and originality from 4 (excellent) to 1 (poor), and gives an overall recommendation from 6 (Strong Accept) to 1 (Strong Reject). The prompt accepts only recommendation 5 or 6. Every other recommendation is stored as `revise`, so a rejected paper continues until the progress check stops it. A useful negative result or a narrowed claim can be accepted when the manuscript stands on its own.
+The review scores quality, clarity, significance, and originality from 4 (excellent) to 1 (poor), and gives an overall recommendation from 6 (Strong Accept) to 1 (Strong Reject). The prompt accepts only recommendation 5 or 6. Every other recommendation is stored as `revise`, so a rejected paper continues until the progress check stops it. A useful negative result or a narrowed claim can be accepted when the manuscript stands on its own. Finishing still requires the two confirmation reviewers to accept as well.
 
 Significant progress is a material change in the claim, the evidence, the scope, or the validity of the argument. A narrowing, a withdrawn claim, or a negative result counts when it would change what a careful reader believes. Rewording the same result does not. When the manuscripts are too thin to judge, the progress prompt tells the model to report progress and name the gap.
 
 | Status | Exit | Meaning |
 | --- | --- | --- |
-| `accepted` | 0 | The review decision was accept. |
+| `accepted` | 0 | Three reviewers accepted. |
 | `running` | 0 | The review asked for another version. In the unattended loop, `--max-cycles` also leaves the status `running`. |
 | `stalled` | 3 | The progress check reported no significant progress. |
 | `blocked` | 2 | The brief changed, git failed, `submit` found no manuscript, the provider rejected the call, the reply was unusable, or another `submit` or `loop` holds the lock. |
@@ -113,19 +119,19 @@ Significant progress is a material change in the claim, the evidence, the scope,
 
 Accepted and stalled runs stay stopped until `documents/loop-state.json` and `documents/versions/` are removed together. `submit` refuses to overwrite an existing version directory.
 
-A blocked `submit` or `loop` clears that flag on the next run and retries. If a snapshot was saved and the decision is empty, the retry reviews that snapshot. If the version record already says accept or stall, the retry pushes that result.
+A blocked `submit` or `loop` clears that flag on the next run and retries. If a snapshot was saved and the decision is empty, the retry reviews that snapshot. If the first reviewer already accepted and a confirmation call did not finish, the retry calls only the missing reviewers. If the version record already says accept or stall, the retry pushes that result.
 
 The first `submit` pins the SHA-256 of `RESEARCH_BRIEF.md`. A later edit blocks the next `submit`. Keep that state, and start a new run if the brief should change.
 
 Provider HTTP 400, 401, 403, and 404 block immediately. Other provider errors, and a reply that is not the expected JSON, are tried once more and then block. Both the failure and the successful call are appended to the usage ledger.
 
-`bin/autoresearch review` sends the current manuscript once. It writes `documents/reviews/adhoc.md` and updates `documents/REMARK.md` or `documents/REVIEW.md`. It does not move the stop state and does not create `v000`.
+`bin/autoresearch review` sends the current manuscript once. It writes `documents/reviews/adhoc.md` and updates `documents/REMARK.md` or `documents/REVIEW.md`. It does not convene the two confirmation reviewers, does not move the stop state, and does not create `v000`.
 
 ## Files the review leaves behind
 
-Accept writes `documents/REMARK.md` and removes `documents/REVIEW.md`. Revise writes `documents/REVIEW.md` and removes `documents/REMARK.md`. The remark names the four scores, the recommendation, and fitting journals or conferences. The review names the supported contribution, the issues that threaten it, required corrections versus optional work, what should stop if the next result fails, and the strongest claim the study can make now.
+Unanimous acceptance writes `documents/REMARK.md`, with all three remarks, and removes `documents/REVIEW.md`. Any other outcome writes `documents/REVIEW.md` and removes `documents/REMARK.md`. A single rejection is that reviewer's text. A split panel is the three reviews under `Reviewer 1`, `Reviewer 2`, and `Reviewer 3`. Each remark names the four scores, the recommendation, and fitting journals or conferences. Each rejection names the supported contribution, the issues that threaten it, required corrections versus optional work, what should stop if the next result fails, and the strongest claim the study can make now.
 
-Each review is also stored as `documents/reviews/vNNN.md` and `documents/reviews/vNNN.json`. Each progress judgment is stored as `documents/progress/vNNN.json`.
+Each round is also stored as `documents/reviews/vNNN.md` and `documents/reviews/vNNN.json`. The JSON records the round decision and, for a panel, each reviewer's decision. Each progress judgment is stored as `documents/progress/vNNN.json`.
 
 The prompt you paste is `loop/prompts/interactive.md`. The strong-model instructions are `loop/prompts/review.md` and `loop/prompts/progress.md`. The unattended loop uses `loop/prompts/agent_initial.md` and `loop/prompts/agent_continue.md`. Edit those files to change the next call.
 
@@ -168,7 +174,7 @@ Environment variables:
 
 ## API usage
 
-`bin/autoresearch usage` prints the provider, model, base URL, and a redacted key hint (the variable name and the last four characters). It then sums `usage/api-usage.jsonl`: calls, prompt tokens, completion tokens, and the cost the provider reported. Each line records the time, operation (`review` or `progress`), version, status, and request id. The raw key is not written to the ledger, the review, or git.
+`bin/autoresearch usage` prints the provider, model, base URL, and a redacted key hint (the variable name and the last four characters). It then sums `usage/api-usage.jsonl`: calls, prompt tokens, completion tokens, and the cost the provider reported. Each line records the time, operation (`review`, `confirmation`, or `progress`), version, status, and request id. `confirmation` is one of the two reviewers called after the first acceptance. The raw key is not written to the ledger, the review, or git.
 
 `--live` is the default. On OpenRouter it queries `GET /api/v1/key` and prints usage, daily, weekly, and monthly figures, the limit and remaining credit, bring-your-own-key usage, and the effective budget when the provider returns them. Providers without a key endpoint print the local ledger and say so. A failed live query is reported and does not fail the command. `--no-live` skips the network.
 
@@ -229,7 +235,7 @@ Experiments go through `bin/research-job`:
 - `documents/paper.md`, `documents/response.md`: the texts the strong model can see.
 - `documents/versions/vNNN/`: snapshotted manuscript, optional response, and manifest.
 - `documents/reviews/`: `vNNN.md`, `vNNN.json`, and `adhoc.md` from a one-shot review.
-- `documents/REMARK.md` or `documents/REVIEW.md`: the latest accept remark or revise review.
+- `documents/REMARK.md` or `documents/REVIEW.md`: the latest unanimous accept, or the latest single review or combined panel.
 - `documents/progress/`: progress judgments.
 - `documents/loop-state.json`: status, brief hash, and per-version decisions.
 - `documents/handoff/prompt.md`: the prompt the unattended loop gives the agent. The interactive session does not use it.
@@ -248,7 +254,7 @@ The interactive session above is the way to run on Bouchet. Obtain an agent-part
 
 - `tests/test_smoke.py`: the offline demo exits 0.
 - `tests/test_lifecycle.py`: drives a campaign against an isolated copy of the template. Incomplete briefs and invalid policies are rejected. `init`, `status`, `report`, and `stop` behave. Editing the brief after `init` is blocked. The `research-job` guards fire: local unauthorized, no allocation, and Slurm refused. Real local execution runs only when the tests themselves are inside a Slurm allocation.
-- `tests/test_loop.py`: a fake agent and a fake HTTP transport cover the OpenRouter and GPT-6 Sol defaults, manuscript-only requests, accept and stall, usage redaction, the provider wires (including Azure), and git refusal of `.env` and key material.
+- `tests/test_loop.py`: a fake agent and a fake HTTP transport cover the OpenRouter and GPT-6 Sol defaults, manuscript-only requests, the three-reviewer accept panel, stall, usage redaction, the provider wires (including Azure), and git refusal of `.env` and key material.
 
 ## Resource and safety rules
 

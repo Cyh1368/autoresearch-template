@@ -6,4 +6,7 @@ the unattended alternative and starts the agent itself.
 
 The campaign helper in ``core.runner`` stays fail-closed. This package does not
 read the brief into permissions and does not submit cluster jobs.
+
+Acceptance takes three reviewers. The first rejection ends the round. The first
+acceptance is checked by two more reviewers, and both must accept.
 """

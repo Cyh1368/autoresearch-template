@@ -4,7 +4,7 @@ Continue the existing research campaign. This process is version {next_version}.
 
 {review}
 
-Read the operating instructions, the complete research brief, this review, the current protocol, findings, experiment ledger, resource policy, budget, and handoff. Reconcile active jobs before submitting any work. Keep the current campaign, its permissions, and its recorded policy.
+Read the operating instructions, the complete research brief, this review, the current protocol, findings, experiment ledger, resource policy, budget, and handoff. If the review contains more than one reviewer, address every reviewer. Reconcile active jobs before submitting any work. Keep the current campaign, its permissions, and its recorded policy.
 
 Resolve the review's most consequential scientific uncertainties. A useful negative result or a narrowed claim is a sufficient outcome. Freeze endpoints before scoring confirmation data. Record amendments and failed runs in the campaign record. Use only resources the brief already authorizes. Record a blocker when a needed action is not authorized, and continue any authorized work that does not depend on it.
 

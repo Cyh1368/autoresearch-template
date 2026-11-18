@@ -1,11 +1,15 @@
-"""One manuscript version per research-agent process, then a strong-model review."""
+"""One manuscript version per research-agent process, then a strong-model review.
+
+A rejection from the first reviewer ends that round. An acceptance is sent to
+two more reviewers, and both must accept before the campaign can finish.
+"""
 import fcntl, hashlib, json, pathlib, subprocess
 
 from loop import manuscript as papers
 from loop.config import load_config, require_agent, require_api_key
 from loop.errors import GitError, LoopBlock, ProviderError
 from loop.git_sync import GitSync
-from loop.parse import parse_decision, parse_json_object, parse_progress
+from loop.parse import combine_reviews, parse_decision, parse_json_object, parse_progress
 from loop.provider import Provider
 from loop.secrets import key_hint
 from loop.state import load_state, save_state
@@ -104,6 +108,50 @@ def _complete_json(root, cfg, provider, messages, parser, *, operation, version,
     raise LoopBlock(f"{operation} reply was not usable: {last_error}")
 
 
+_PANEL_SIZE = 3
+
+
+def _review_record(role, result):
+    return {
+        "role": role,
+        "decision": result["decision"],
+        "summary": result.get("summary") or "",
+        "review_markdown": result["review_markdown"],
+    }
+
+
+def _snapshot_view(root, cfg, item):
+    folder = papers.version_dir(root, cfg, item["n"])
+    manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+
+    class _Snap:
+        pass
+
+    snap = _Snap()
+    snap.paper = (folder / "paper.md").read_text(encoding="utf-8")
+    response_text = None
+    if item.get("response_sent"):
+        response_text = (folder / "response.md").read_text(encoding="utf-8")
+    return snap, response_text, manifest.get("note")
+
+
+def _call_review(root, cfg, provider, secret, key_name, number, snap, response_text, note, operation, reviewer_index):
+    return _complete_json(
+        root, cfg, provider,
+        [
+            {"role": "system", "content": papers.load_prompt("review.md")},
+            {
+                "role": "user",
+                "content": papers.review_user_message(
+                    snap, response_text, note, reviewer_index=reviewer_index,
+                ),
+            },
+        ],
+        parse_decision,
+        operation=operation, version=number, secret=secret, key_name=key_name,
+    )
+
+
 def _publish_named_review(root, result, text):
     documents = pathlib.Path(root) / "documents"
     documents.mkdir(parents=True, exist_ok=True)
@@ -124,19 +172,18 @@ def _write_review(root, cfg, number, result):
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"v{number:03d}.md"
     body = result["review_markdown"]
-    if result.get("summary"):
+    if result.get("summary") and not result.get("reviews"):
         body = result["summary"] + "\n\n" + body
     text = body.rstrip() + "\n"
     path.write_text(text, encoding="utf-8")
     _publish_named_review(root, result, text)
-    meta = folder / f"v{number:03d}.json"
-    meta.write_text(
-        json.dumps(
-            {"version": number, "decision": result["decision"], "summary": result.get("summary", "")},
-            indent=2,
-        ) + "\n",
-        encoding="utf-8",
-    )
+    payload = {"version": number, "decision": result["decision"], "summary": result.get("summary", "")}
+    if result.get("reviews"):
+        payload["panel"] = [
+            {"role": item["role"], "decision": item["decision"], "summary": item.get("summary", "")}
+            for item in result["reviews"]
+        ]
+    (folder / f"v{number:03d}.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     return path
 
 
@@ -144,10 +191,44 @@ def _apply_decision(state, number, result):
     state["versions"][-1]["decision"] = result["decision"]
     if result["decision"] == "accept":
         state["status"] = "accepted"
-        state["reason"] = f"accepted at version {number}"
+        if result.get("reviews"):
+            state["reason"] = f"accepted by three reviewers at version {number}"
+        else:
+            state["reason"] = f"accepted at version {number}"
     else:
         state["status"] = "running"
-        state["reason"] = f"revise at version {number}"
+        if result.get("reviews"):
+            state["reason"] = f"revise at version {number}: the panel did not all accept"
+        else:
+            state["reason"] = f"revise at version {number}"
+
+
+def _confirm_panel(root, cfg, state, provider, secret, key_name):
+    """Call the two reviewers still required after the first acceptance."""
+    item = state["versions"][-1]
+    panel = item["panel"]
+    number = item["n"]
+    snap, response_text, note = _snapshot_view(root, cfg, item)
+    while len(panel["reviews"]) < _PANEL_SIZE:
+        slot = len(panel["reviews"])
+        print(
+            f"Calling {cfg.strong.provider} model {cfg.strong.model} "
+            f"for confirmation review {slot} of {_PANEL_SIZE - 1} on version {number}."
+        )
+        result = _call_review(
+            root, cfg, provider, secret, key_name, number, snap, response_text, note,
+            "confirmation", slot + 1,
+        )
+        panel["reviews"].append(_review_record("confirmation", result))
+        save_state(root, cfg, state)
+        print(f"Confirmation {slot} of version {number}: {result['decision']}")
+    combined = combine_reviews(panel["reviews"])
+    panel["phase"] = "closed"
+    path = _write_review(root, cfg, number, combined)
+    _apply_decision(state, number, combined)
+    save_state(root, cfg, state)
+    print(f"Panel of version {number}: {combined['decision']} ({path})")
+    return combined
 
 
 def _review_version(root, cfg, state, provider, secret, key_name, manuscript, response_text, note):
@@ -162,55 +243,37 @@ def _review_version(root, cfg, state, provider, secret, key_name, manuscript, re
         "progress": None,
     })
     save_state(root, cfg, state)
-    print(f"Calling {cfg.strong.provider} model {cfg.strong.model} for review of version {number}.")
-    result = _complete_json(
-        root, cfg, provider,
-        [
-            {"role": "system", "content": papers.load_prompt("review.md")},
-            {"role": "user", "content": papers.review_user_message(manuscript, response_text, note)},
-        ],
-        parse_decision,
-        operation="review", version=number, secret=secret, key_name=key_name,
-    )
-    path = _write_review(root, cfg, number, result)
-    _apply_decision(state, number, result)
-    save_state(root, cfg, state)
-    print(f"Review of version {number}: {result['decision']} ({path})")
-    return result
+    return _finish_open_review(root, cfg, state, provider, secret, key_name)
 
 
 def _finish_open_review(root, cfg, state, provider, secret, key_name):
-    """Review a snapshot that was saved before an earlier call failed."""
+    """Review a snapshot that was saved before an earlier call failed.
+
+    An open panel keeps the reviewers who already answered and calls only the rest.
+    """
     item = state["versions"][-1]
     number = item["n"]
-    folder = papers.version_dir(root, cfg, number)
-    paper = (folder / "paper.md").read_text(encoding="utf-8")
-
-    class _Snap:
-        pass
-
-    snap = _Snap()
-    snap.paper = paper
-    response_text = None
-    note = "No author response was sent for this version."
-    if item.get("response_sent"):
-        response_text = (folder / "response.md").read_text(encoding="utf-8")
-        note = None
+    panel = item.get("panel") or {}
+    if panel.get("phase") == "confirming":
+        return _confirm_panel(root, cfg, state, provider, secret, key_name)
+    snap, response_text, note = _snapshot_view(root, cfg, item)
     print(f"Calling {cfg.strong.provider} model {cfg.strong.model} for review of version {number}.")
-    result = _complete_json(
-        root, cfg, provider,
-        [
-            {"role": "system", "content": papers.load_prompt("review.md")},
-            {"role": "user", "content": papers.review_user_message(snap, response_text, note)},
-        ],
-        parse_decision,
-        operation="review", version=number, secret=secret, key_name=key_name,
+    result = _call_review(
+        root, cfg, provider, secret, key_name, number, snap, response_text, note, "review", None,
     )
-    path = _write_review(root, cfg, number, result)
-    _apply_decision(state, number, result)
+    if result["decision"] != "accept":
+        path = _write_review(root, cfg, number, result)
+        _apply_decision(state, number, result)
+        save_state(root, cfg, state)
+        print(f"Review of version {number}: revise ({path})")
+        return result
+    item["panel"] = {"phase": "confirming", "reviews": [_review_record("primary", result)]}
     save_state(root, cfg, state)
-    print(f"Review of version {number}: {result['decision']} ({path})")
-    return result
+    print(
+        f"Reviewer 1 accepted version {number}. "
+        "Two more reviewers must accept before the work can finish."
+    )
+    return _confirm_panel(root, cfg, state, provider, secret, key_name)
 
 
 def _progress_check(root, cfg, state, provider, secret, key_name):
