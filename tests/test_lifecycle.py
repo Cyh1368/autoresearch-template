@@ -69,7 +69,8 @@ class Lifecycle(unittest.TestCase):
 
     # --- brief / policy validation -------------------------------------------
     def test_incomplete_brief_rejected_cleanly(self):
-        # Default template brief still holds placeholders.
+        text = (self.dst / "RESEARCH_BRIEF.md").read_text()
+        (self.dst / "RESEARCH_BRIEF.md").write_text(text + "\n[Question]\n")
         (self.dst / "policy.json").write_text(json.dumps(GOOD_POLICY))
         p = run(self.dst, ["init"])
         self.assertEqual(p.returncode, 1)

@@ -141,22 +141,21 @@ You are a demanding, constructive research reviewer advising an autonomous resea
 agent. Your review should help the agent reach a more important and defensible
 result with less wasted work.
 
-The manuscript and other relevant files are attached.
-Your task is to decide whether to accept or reject this work based on
-quality, clarity, significance, originality.
+You receive the manuscript and, when one was written for this version, the author's
+response to the previous review. Experimental data, code, logs, and campaign records
+are withheld. Judge the manuscript by what it reports. Ask for missing evidence to
+be written into the manuscript.
 
-Evaluate submissions across individual metrics on a 4-point scale (4: excellent, 3: good, 2: fair, 1: poor)
-Select an overall recommendation ranging from 6: Strong Accept (groundbreaking, technically flawless)
-down to 1: Strong Reject (fundamentally wrong or unethical). Intermediate options include Accept (5),
-Borderline Accept (4), Borderline Reject (3), and Reject (2).
+Decide whether to accept or reject the work on quality, clarity, significance, and
+originality. Score each of those four on a 4-point scale (4 excellent, 3 good,
+2 fair, 1 poor). Give an overall recommendation from 6 Strong Accept through
+5 Accept, 4 Borderline Accept, 3 Borderline Reject, 2 Reject, and 1 Strong Reject.
 
-If you decide to accept, write your detailed remark as a markdown file as REMARK.md,
-and recommend what journals or conferences are most suitable for this work.
+On accept, the remark recommends the journals or conferences that fit the work.
+The supervisor saves it as documents/REMARK.md. On reject, the supervisor saves
+the review as documents/REVIEW.md.
 
-If you decide to reject, write your detailed review as a markdown file
-with the name REVIEW.md.
-
-Evaluate the work actually supported by the available evidence. State what you
+Evaluate the work actually supported by the manuscript. State what you
 inspected and what remains unaudited. Do not treat a manuscript's description of
 an experiment as independent verification that it ran correctly.
 
@@ -375,6 +374,8 @@ controller), and a small deterministic, stdlib-only helper (`core/runner.py` beh
 `bin/autoresearch` and `bin/research-job`). The helper never interprets prose into
 permissions and never submits cluster jobs on its own — it only enforces the fields
 that were explicitly recorded in a policy file and refuses anything else.
+`bin/autoresearch loop` is the outer supervisor: it runs the controller once per
+manuscript version, sends only that manuscript to a strong model, and syncs git.
 
 Control flow for one campaign:
 
@@ -413,6 +414,47 @@ experiment-ledger.jsonl / findings.md  →  bin/autoresearch report
   "brief changed" — keep the old campaign and initialize a new one explicitly.
   `stop` drops a `STOP` marker to pause new work and never cancels active jobs.
 
+## Autonomous review loop
+
+The human writes `RESEARCH_BRIEF.md` and starts `bin/autoresearch loop`. That is the
+per-campaign intervention. The supervisor then repeats:
+
+1. `git pull` when `origin` has an upstream.
+2. Run the configured research agent on `loop/prompts/agent_initial.md` or
+   `loop/prompts/agent_continue.md`. Any agent command works. The template does not
+   assume a cluster, an account, or a product.
+3. When the agent exits, read `documents/paper.md` and, if it is new,
+   `documents/response.md`. Snapshot that pair under `documents/versions/`.
+4. Call the strong model with `loop/prompts/review.md` and those texts. Code, logs,
+   datasets, campaign records, and other files under `documents/` are not attached.
+5. Commit and `git push`. API keys, `.env`, and diffs that contain key material are
+   left unstaged.
+6. Stop when the review decision is `accept`.
+7. Otherwise, once three versions exist, call the same model with
+   `loop/prompts/progress.md` and the last three manuscripts. Stop when that call
+   reports no significant progress. A positive progress judgment starts another
+   agent version.
+
+Exit codes: `0` accepted or paused by `--max-cycles`, `3` no significant progress,
+`2` blocked. Accepted and stalled loops stay stopped until `documents/loop-state.json`
+is removed together with `documents/versions/`. A blocked loop retries on the next
+`bin/autoresearch loop`.
+
+The default strong model is OpenRouter `openai/gpt-6-sol` (GPT-6 Sol), using
+`OPENROUTER_API_KEY`. `loop.config.json` can switch provider, model, base URL, and
+key variable. Presets: `openrouter`, `openai`, `anthropic`, `gemini`, and
+`openai-compatible`. Copy `loop.config.example.json`. Put the key in the environment
+named by `api_key_env`. A key inside the config file is rejected.
+
+`bin/autoresearch usage` prints the local ledger at `usage/api-usage.jsonl`
+(call, model, prompt tokens, completion tokens, reported cost, redacted key hint).
+`--live` also queries the provider key endpoint when it has one. OpenRouter's
+`GET /api/v1/key` supplies usage, limit, and remaining credit. The raw key is not
+written to the ledger, the review, or git.
+
+`bin/autoresearch review` sends the current manuscript once and does not advance
+the stop state. Use `loop` for the unattended cycle.
+
 ### Commands
 
 These are optional to use.
@@ -426,6 +468,9 @@ These are optional to use.
 | `bin/autoresearch report` | Write `report.md` (status + experiment count) for the current campaign. |
 | `bin/autoresearch stop` | Request a graceful stop (drops `STOP`; does not cancel jobs). |
 | `bin/autoresearch smoke` | Run the offline mechanics demo in `examples/smoke_test/`. |
+| `bin/autoresearch loop` | Run the agent, review the manuscript, sync git, and stop on accept or a stalled window. |
+| `bin/autoresearch usage` | Print local token spend and, with `--live`, the provider key's usage. |
+| `bin/autoresearch review` | Send the current manuscript to the strong model once. |
 | `bin/research-job {local\|slurm} POLICY.json CMD...` | The only sanctioned execution path (see above). |
 
 `init` reads `./policy.json` from the current working directory, so run it from the
@@ -442,13 +487,20 @@ repository root. `current()` selects the most recent `campaign/<id>` by name.
   isolated directory per experiment. Generated; never edit or overwrite.
 - `examples/smoke_test/` — offline demo (writes to a gitignored `output/`), not research.
 - `slurm/agent-session.example.sh` — illustrative session notes only.
+- `loop/` — supervisor, provider wires, prompts, and usage ledger writer.
+- `loop.config.example.json` — provider, agent command, git remote, and the three-version stop.
+- `usage/api-usage.jsonl` — created on the first strong-model call. Safe to commit: key hints only.
 
-## Quick start for Yale students
+## Quick start
 
-1. Copy this directory to the campaign project and edit only `RESEARCH_BRIEF.md`.
-2. Obtain a Bouchet agent-partition session under current [YCRC Bouchet documentation](https://docs.ycrc.yale.edu/clusters/bouchet/). Each agent-partition job is limited to one CPU and 8 GB; check documentation for current limits. Within the session, consult local instructions and load `local-coding-agents` as documented.
-3. Start your supported coding agent in this directory and give it: `Read AGENTS.md, AGENT_INSTRUCTIONS.md, and the complete RESEARCH_BRIEF.md. Derive and validate a bounded policy, initialize only if safe, then execute the documented research loop autonomously. Do not start a real campaign unless the brief is complete and authorizes it.`
-4. Use `bin/autoresearch status`, `bin/autoresearch stop`, and `bin/autoresearch report` to inspect/control.
+1. Copy this directory and edit `RESEARCH_BRIEF.md`. That file is the only per-campaign human input.
+2. Export a strong-model key. The default provider is OpenRouter and the default model is `openai/gpt-6-sol` (GPT-6 Sol): `export OPENROUTER_API_KEY=...`. Other providers, base URLs, and models go in `loop.config.json`. See `loop.config.example.json`.
+3. Export the research-agent command once. `{prompt_file}` is replaced with the handoff prompt. The process must write `documents/paper.md` and exit: `export AUTORESEARCH_AGENT_COMMAND='your-agent --prompt-file {prompt_file}'`.
+4. Start the unattended loop with `bin/autoresearch loop`, then inspect spend with `bin/autoresearch usage`.
+
+### Example: Yale Bouchet
+
+Obtain a Bouchet agent-partition session under current [YCRC Bouchet documentation](https://docs.ycrc.yale.edu/clusters/bouchet/). Each agent-partition job is limited to one CPU and 8 GB; check documentation for current limits. Within the session, consult local instructions and load `local-coding-agents` as documented. Point `AUTORESEARCH_AGENT_COMMAND` at the coding agent in that session. Separate Slurm submissions stay fail-closed until the brief authorizes them. `bin/autoresearch status`, `stop`, and `report` still inspect the campaign.
 
 ## Testing
 
@@ -462,6 +514,9 @@ Run the suite with `python3 -m pytest tests/`. It is stdlib/pytest only and offl
   blocked; and every `research-job` guard rail fires (local-unauthorized,
   no-allocation, Slurm fail-closed). Real local execution is exercised only when the
   tests themselves run inside an active Slurm allocation.
+- `tests/test_loop.py` — the supervisor, with a fake agent and a fake HTTP transport:
+  OpenRouter/GPT-6 Sol defaults, manuscript-only requests, accept and stall stops,
+  usage redaction, provider wires, and git refusal of `.env` and key material.
 
 ## Resource and safety rules
 
@@ -471,4 +526,4 @@ The full loop and artifact expectations are in `AGENT_INSTRUCTIONS.md`. At campa
 
 ## Limitations
 
-This starter deliberately does not parse natural language into permissions or submit Slurm jobs automatically: its current deterministic helper rejects those operations rather than risk accidental access. A live agent must implement/validate explicit policy and cluster-specific scheduler details before real work; until that exists, use only the offline smoke. Initialize/recovery locking, full accounting, budget enforcement, and durable campaign ledger are not yet implemented. Never treat this template as proof that resource limits are enforced. Do not launch a real campaign during template setup.
+This starter deliberately does not parse natural language into permissions or submit Slurm jobs automatically: its current deterministic helper rejects those operations rather than risk accidental access. The outer loop does call the configured strong model, and only with the manuscript and author response. A live agent must implement/validate explicit policy and cluster-specific scheduler details before real compute; until that exists, use only the offline smoke for experiments. Initialize/recovery locking, full accounting, budget enforcement, and durable campaign ledger are not yet implemented. Never treat this template as proof that resource limits are enforced. Do not launch a real campaign during template setup. The strong-model calls spend the configured API key; `bin/autoresearch usage` is the record of that spend.

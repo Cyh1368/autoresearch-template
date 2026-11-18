@@ -2,3 +2,6 @@ __pycache__/
 examples/smoke_test/output/
 campaign/*/
 !campaign/.gitkeep
+.env
+.env.*
+documents/.loop.lock
