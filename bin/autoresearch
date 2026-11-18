@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-_LOOP = {"loop", "usage", "review", "submit"}
+_LOOP = {"loop", "usage", "review", "submit", "reopen"}
 if len(sys.argv) > 1 and sys.argv[1] in _LOOP:
     from loop.cli import main
     try:

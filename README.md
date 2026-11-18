@@ -4,6 +4,8 @@ This is a template for a computational research campaign. You write `RESEARCH_BR
 
 The brief is the only per-campaign input. The reviewer API key is one-time setup. The default reviewer is OpenRouter model `openai/gpt-6-sol` (GPT-6 Sol). You choose the coding agent and drive it yourself.
 
+A finished campaign stays finished. When you want different work, replace `RESEARCH_BRIEF.md` and paste `loop/prompts/interactive_reopen.md`.
+
 Two programs share the repository:
 
 - `bin/autoresearch submit` is the handoff. The agent calls it. It calls the strong model and pushes. It does not start the coding agent.
@@ -60,6 +62,8 @@ pi
 - `This campaign is stalled. Stop.` The last three versions did not make significant progress. The session is finished.
 - `A person has to clear this block.` The command failed. The reason is in `documents/loop-state.json`. Fix that, then let the agent run `bin/autoresearch submit` again. A saved snapshot with an empty decision and no finished panel is reviewed on that retry. Confirmation reviews that already returned are kept. A finished version is not reviewed again.
 
+Accepted and stalled are the two finished rounds. To continue with a new proposal, follow [A new proposal](#a-new-proposal).
+
 Spend is `bin/autoresearch usage` in another shell. `--no-live` skips the network lookup.
 
 ```
@@ -80,6 +84,11 @@ agent runs bin/autoresearch submit
 agent runs sleep 600
         |
         +-- REMARK.md or stalled --> agent stops
+        |                         |
+        |                         +-- new RESEARCH_BRIEF.md
+        |                         +-- paste loop/prompts/interactive_reopen.md
+        |                         +-- bin/autoresearch reopen
+        |                         +-- new campaign, then the same session
         +-- REVIEW.md --> next version in the same session
 ```
 
@@ -117,11 +126,11 @@ Significant progress is a material change in the claim, the evidence, the scope,
 
 `--max-cycles N` applies to `bin/autoresearch loop` only. A second `submit` or `loop` in the same checkout blocks on `documents/.loop.lock`.
 
-Accepted and stalled runs stay stopped until `documents/loop-state.json` and `documents/versions/` are removed together. `submit` refuses to overwrite an existing version directory.
+Accepted and stalled runs stay stopped. `submit` refuses to overwrite an existing version directory. Replacing the brief and pasting `loop/prompts/interactive_reopen.md` is how a finished round continues. `bin/autoresearch reopen` archives that round under `documents/rounds/` and pins the new brief. Leave `documents/loop-state.json` and `documents/versions/` in place for that command.
 
 A blocked `submit` or `loop` clears that flag on the next run and retries. If a snapshot was saved and the decision is empty, the retry reviews that snapshot. If the first reviewer already accepted and a confirmation call did not finish, the retry calls only the missing reviewers. If the version record already says accept or stall, the retry pushes that result.
 
-The first `submit` pins the SHA-256 of `RESEARCH_BRIEF.md`. A later edit blocks the next `submit`. Keep that state, and start a new run if the brief should change.
+The first `submit` pins the SHA-256 of `RESEARCH_BRIEF.md`. A later edit during a running round blocks the next `submit`. Keep that state. A new proposal is adopted only after the round is accepted or stalled, through `bin/autoresearch reopen`.
 
 Provider HTTP 400, 401, 403, and 404 block immediately. Other provider errors, and a reply that is not the expected JSON, are tried once more and then block. Both the failure and the successful call are appended to the usage ledger.
 
@@ -133,7 +142,19 @@ Unanimous acceptance writes `documents/REMARK.md`, with all three remarks, and r
 
 Each round is also stored as `documents/reviews/vNNN.md` and `documents/reviews/vNNN.json`. The JSON records the round decision and, for a panel, each reviewer's decision. Each progress judgment is stored as `documents/progress/vNNN.json`.
 
-The prompt you paste is `loop/prompts/interactive.md`. The strong-model instructions are `loop/prompts/review.md` and `loop/prompts/progress.md`. The unattended loop uses `loop/prompts/agent_initial.md` and `loop/prompts/agent_continue.md`. Edit those files to change the next call.
+The prompt you paste is `loop/prompts/interactive.md`. After a finished round, the next prompt is `loop/prompts/interactive_reopen.md`. The strong-model instructions are `loop/prompts/review.md` and `loop/prompts/progress.md`. The unattended loop uses `loop/prompts/agent_initial.md` and `loop/prompts/agent_continue.md`. Edit those files to change the next call.
+
+## A new proposal
+
+Use this when the agent has stopped on acceptance or a stall and the result is not what you wanted.
+
+1. Replace `RESEARCH_BRIEF.md` with the new proposal, or give the proposal to the agent in the same message as the prompt. Sections 1, 3, 4, and 7 are still required. The saved file has to differ from the finished round. A brief that still contains `[Question`, `[Systems`, or `[Scope` is refused.
+
+2. Paste `loop/prompts/interactive_reopen.md` into the open coding-agent session. The agent runs `bin/autoresearch reopen` and waits. That command copies the finished manuscript, author response, review, version snapshots, progress judgments, and loop state into `documents/rounds/001-accepted` or `documents/rounds/001-stalled`, then removes those live copies and pins the new brief. The next finished round is `002-`, and so on. Campaign directories stay where they are. `reopen` does not call the strong model and does not pull, commit, or push.
+
+3. The agent writes a new `policy.json` from the new brief, runs `bin/autoresearch init`, and writes a new `documents/paper.md`. From there it is the same interactive session: `bin/autoresearch submit`, sleep 600 seconds, then follow the line `submit` prints.
+
+When `reopen` blocks, the finished round is unchanged. A running or blocked round stays in place. An unchanged or incomplete brief stays in place. A leftover `documents/rounds/.staging-*` directory has to be removed by hand after you check that the live round is intact. The unattended `bin/autoresearch loop` does not adopt a new brief. The next `submit` commits the archive with the new manuscript.
 
 ## Configuration
 
@@ -214,6 +235,7 @@ Experiments go through `bin/research-job`:
 | `bin/autoresearch stop` | Request a graceful stop. Drops `STOP`. Does not cancel jobs. |
 | `bin/autoresearch smoke` | Run `examples/smoke_test/`. |
 | `bin/autoresearch submit` | Usual path. Review the manuscript already in `documents/paper.md`, sync git, and print the file the agent should read after `sleep 600`. |
+| `bin/autoresearch reopen` | After an accepted or stalled round, archive it and pin a new `RESEARCH_BRIEF.md`. The interactive agent then starts the next campaign. |
 | `bin/autoresearch loop` | Unattended alternative. Start the agent, review each version, sync git, and stop on accept or a stalled window. |
 | `bin/autoresearch loop --max-cycles N` | Unattended alternative. Stop this process after N cycles. Status stays `running`. |
 | `bin/autoresearch usage` | Print the local ledger and, by default, live key usage. |
@@ -230,6 +252,7 @@ Experiments go through `bin/research-job`:
 - `bin/autoresearch`, `bin/research-job`: command entry points.
 - `loop/`: the `submit` client, provider calls, prompts, and the usage ledger.
 - `loop/prompts/interactive.md`: the prompt to paste. This is the usual session.
+- `loop/prompts/interactive_reopen.md`: the prompt to paste after an accepted or stalled round, once `RESEARCH_BRIEF.md` is a new proposal.
 - `loop/prompts/`: review and progress prompts. `agent_initial.md` and `agent_continue.md` are for the unattended loop.
 - `loop.config.example.json`: sample reviewer, git remote, and stop window. The `agent` block is for the unattended loop.
 - `documents/paper.md`, `documents/response.md`: the texts the strong model can see.
@@ -237,7 +260,8 @@ Experiments go through `bin/research-job`:
 - `documents/reviews/`: `vNNN.md`, `vNNN.json`, and `adhoc.md` from a one-shot review.
 - `documents/REMARK.md` or `documents/REVIEW.md`: the latest unanimous accept, or the latest single review or combined panel.
 - `documents/progress/`: progress judgments.
-- `documents/loop-state.json`: status, brief hash, and per-version decisions.
+- `documents/loop-state.json`: status, brief hash, and per-version decisions. After `reopen`, `previous_round` names the archive.
+- `documents/rounds/`: archived finished rounds. Each directory holds the manuscript, review, version snapshots, and the loop state from that round.
 - `documents/handoff/prompt.md`: the prompt the unattended loop gives the agent. The interactive session does not use it.
 - `usage/api-usage.jsonl`: created on the first strong-model call. Key hints only.
 - `campaign/<id>/`: brief snapshot, policy, state, ledger, findings, protocol, and one directory per experiment. Gitignored.
@@ -254,7 +278,7 @@ The interactive session above is the way to run on Bouchet. Obtain an agent-part
 
 - `tests/test_smoke.py`: the offline demo exits 0.
 - `tests/test_lifecycle.py`: drives a campaign against an isolated copy of the template. Incomplete briefs and invalid policies are rejected. `init`, `status`, `report`, and `stop` behave. Editing the brief after `init` is blocked. The `research-job` guards fire: local unauthorized, no allocation, and Slurm refused. Real local execution runs only when the tests themselves are inside a Slurm allocation.
-- `tests/test_loop.py`: a fake agent and a fake HTTP transport cover the OpenRouter and GPT-6 Sol defaults, manuscript-only requests, the three-reviewer accept panel, stall, usage redaction, the provider wires (including Azure), and git refusal of `.env` and key material.
+- `tests/test_loop.py`: a fake agent and a fake HTTP transport cover the OpenRouter and GPT-6 Sol defaults, manuscript-only requests, the three-reviewer accept panel, stall, reopening a finished round from a new brief, usage redaction, the provider wires (including Azure), and git refusal of `.env` and key material.
 
 ## Resource and safety rules
 

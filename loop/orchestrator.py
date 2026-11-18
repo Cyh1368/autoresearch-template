@@ -2,8 +2,10 @@
 
 A rejection from the first reviewer ends that round. An acceptance is sent to
 two more reviewers, and both must accept before the campaign can finish.
+``reopen_campaign`` archives an accepted or stalled round after the human
+replaces the research brief, so the interactive session can start another.
 """
-import fcntl, hashlib, json, pathlib, subprocess
+import fcntl, hashlib, json, pathlib, shutil, subprocess
 
 from loop import manuscript as papers
 from loop.config import load_config, require_agent, require_api_key
@@ -12,7 +14,7 @@ from loop.git_sync import GitSync
 from loop.parse import combine_reviews, parse_decision, parse_json_object, parse_progress
 from loop.provider import Provider
 from loop.secrets import key_hint
-from loop.state import load_state, save_state
+from loop.state import empty_state, load_state, save_state
 from loop.usage import append_usage
 
 
@@ -31,8 +33,9 @@ def _check_brief(root, cfg, state):
         return
     if state["brief_sha256"] != digest:
         raise LoopBlock(
-            "RESEARCH_BRIEF.md changed after the loop started. "
-            "Keep this loop state and create a new one if the brief should change."
+            "RESEARCH_BRIEF.md changed after this round started. "
+            "Keep this loop state. A new proposal is adopted with bin/autoresearch reopen "
+            "only after the round is accepted or stalled."
         )
 
 
@@ -525,6 +528,178 @@ def run_loop(root, *, config=None, env=None, transport=None, run_agent=None, git
             save_state(root, cfg, state)
             print(f"Blocked: {exc}")
             return _public(state)
+
+
+_BRIEF_PLACEHOLDERS = ("[Question", "[Systems", "[Scope")
+
+
+def _live_payloads(root, cfg):
+    """Files a finished round leaves in documents/ for the agent to read."""
+    documents = pathlib.Path(root) / "documents"
+    paths = [
+        pathlib.Path(root) / cfg.paper_rel,
+        pathlib.Path(root) / cfg.response_rel,
+        documents / "REVIEW.md",
+        documents / "REMARK.md",
+        pathlib.Path(root) / cfg.versions_rel,
+        pathlib.Path(root) / cfg.reviews_rel,
+        pathlib.Path(root) / cfg.progress_rel,
+    ]
+    return [path for path in paths if path.exists()]
+
+
+def _round_dirs(root):
+    rounds = pathlib.Path(root) / "documents" / "rounds"
+    if not rounds.is_dir():
+        return []
+    found = []
+    for path in rounds.iterdir():
+        name = path.name
+        if path.is_dir() and len(name) >= 4 and name[:3].isdigit() and name[3] == "-":
+            found.append(path)
+    return sorted(found)
+
+
+def _matching_round(root, state):
+    """Return the archive of this finished round when a previous reopen already wrote it."""
+    found = _round_dirs(root)
+    if not found:
+        return None
+    newest = found[-1]
+    manifest_path = newest / "manifest.json"
+    if not manifest_path.is_file():
+        return None
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if manifest.get("brief_sha256") != state.get("brief_sha256"):
+        return None
+    if manifest.get("status") != state.get("status"):
+        return None
+    if manifest.get("reason") != (state.get("reason") or ""):
+        return None
+    return newest
+
+
+def _remove_path(path):
+    if path.is_dir():
+        shutil.rmtree(path)
+    elif path.exists():
+        path.unlink()
+
+
+def _archive_round(root, cfg, state, payloads):
+    rounds = pathlib.Path(root) / "documents" / "rounds"
+    rounds.mkdir(parents=True, exist_ok=True)
+    if any(rounds.glob(".staging-*")):
+        raise LoopBlock(
+            "A previous reopen left a documents/rounds/.staging-* directory. "
+            "Remove it after checking the live round is intact."
+        )
+    found = _round_dirs(root)
+    number = int(found[-1].name.split("-", 1)[0]) + 1 if found else 1
+    name = f"{number:03d}-{state['status']}"
+    staging = rounds / f".staging-{name}"
+    dest = rounds / name
+    staging.mkdir()
+    try:
+        archived = []
+        state_path = pathlib.Path(root) / cfg.state_rel
+        shutil.copy2(state_path, staging / state_path.name)
+        archived.append(state_path.name)
+        for path in payloads:
+            if path.is_dir():
+                shutil.copytree(path, staging / path.name)
+                archived.append(path.name + "/")
+            else:
+                shutil.copy2(path, staging / path.name)
+                archived.append(path.name)
+        manifest = {
+            "status": state["status"],
+            "reason": state.get("reason") or "",
+            "brief_sha256": state.get("brief_sha256"),
+            "versions": [item.get("n") for item in state.get("versions") or []],
+            "archived": archived,
+        }
+        (staging / "manifest.json").write_text(
+            json.dumps(manifest, indent=2) + "\n", encoding="utf-8",
+        )
+        staging.rename(dest)
+    except Exception:
+        if staging.exists():
+            shutil.rmtree(staging)
+        raise
+    return dest
+
+
+def _adopt_brief(root, cfg, state):
+    status = state.get("status")
+    if status not in {"accepted", "stalled"}:
+        raise LoopBlock(
+            f"This round is {status}. Reopen waits until the round is accepted or stalled. "
+            "Keep this state."
+        )
+    if not state.get("brief_sha256"):
+        raise LoopBlock("This round has no pinned brief hash. Keep this state.")
+    digest = _brief_sha(root)
+    brief_path = pathlib.Path(root) / "RESEARCH_BRIEF.md"
+    try:
+        brief = brief_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise LoopBlock("RESEARCH_BRIEF.md is not UTF-8 text.") from exc
+    for marker in _BRIEF_PLACEHOLDERS:
+        if marker in brief:
+            raise LoopBlock(
+                "Brief incomplete: required section still holds placeholder " + marker + "..."
+            )
+    if digest == state["brief_sha256"]:
+        raise LoopBlock(
+            "RESEARCH_BRIEF.md is unchanged. Write the new proposal there before reopening. "
+            "This finished round stays in place."
+        )
+    payloads = _live_payloads(root, cfg)
+    finished = _matching_round(root, state)
+    if finished is None:
+        finished = _archive_round(root, cfg, state, payloads)
+    for path in payloads:
+        _remove_path(path)
+    relative = finished.relative_to(root).as_posix()
+    fresh = empty_state()
+    fresh["brief_sha256"] = digest
+    fresh["status"] = "running"
+    fresh["reason"] = f"reopened after {status}; previous round is {relative}"
+    fresh["previous_round"] = relative
+    save_state(root, cfg, fresh)
+    return relative
+
+
+def reopen_campaign(root, *, config=None, env=None):
+    """Archive an accepted or stalled round and pin the brief the human just wrote.
+
+    Does not call the strong model and does not sync git. The next manuscript
+    goes through submit. A refusal leaves the finished round where it is.
+    """
+    root = pathlib.Path(root)
+    cfg = config or load_config(root, env)
+    with _Lock(root):
+        state = load_state(root, cfg)
+        try:
+            relative = _adopt_brief(root, cfg, state)
+        except LoopBlock as exc:
+            print(f"Blocked: {exc}")
+            return {
+                "status": "blocked",
+                "reason": str(exc),
+                "versions": len(state.get("versions") or []),
+            }
+    print(f"Reopened. Previous round is {relative}.")
+    print(
+        "Write a new policy.json from RESEARCH_BRIEF.md, run bin/autoresearch init, "
+        "and write a new documents/paper.md."
+    )
+    print("Then run bin/autoresearch submit, sleep 600 seconds, and follow the line it prints.")
+    return _public(load_state(root, cfg))
 
 
 def _tell_agent(state):

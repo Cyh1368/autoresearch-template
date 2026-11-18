@@ -1,10 +1,10 @@
 """Supervisor tests. No network. The strong model sees the manuscript only."""
-import json, pathlib, shutil, subprocess, tempfile, unittest
+import hashlib, json, pathlib, shutil, subprocess, tempfile, unittest
 
 from loop.config import load_config
 from loop.errors import GitError, LoopBlock, ProviderError
 from loop.git_sync import GitSync
-from loop.orchestrator import run_loop, submit_manuscript
+from loop.orchestrator import reopen_campaign, run_loop, submit_manuscript
 from loop.parse import combine_reviews, parse_decision, parse_json_object, parse_progress
 from loop.provider import Provider
 from loop.cli import main
@@ -276,6 +276,7 @@ class LoopTests(unittest.TestCase):
         result = self.drive(again, http)
         self.assertEqual(result["status"], "blocked")
         self.assertIn("RESEARCH_BRIEF.md changed", result["reason"])
+        self.assertIn("reopen", result["reason"])
         self.assertEqual(again.calls, 0)
 
     def test_usage_report_and_live_key(self):
@@ -504,6 +505,189 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(parse_decision(parsed)["decision"], "accept")
         progress = parse_progress(parse_json_object('{"significant_progress":"false","rationale":"same result"}'))
         self.assertFalse(progress["significant_progress"])
+
+    def _submit(self, http, paper, response=None):
+        (self.root / "documents" / "paper.md").write_text(paper, encoding="utf-8")
+        if response is not None:
+            (self.root / "documents" / "response.md").write_text(response, encoding="utf-8")
+        cfg, env = self.config()
+        return submit_manuscript(self.root, config=cfg, env=env, transport=http, git=self.git)
+
+    def test_reopen_after_accept_starts_a_new_round(self):
+        http = HTTP(decisions=["accept"])
+        cfg, env = self.config()
+        (self.root / "policy.json").write_text('{"kept": true}\n', encoding="utf-8")
+        first = self._submit(http, "Old manuscript.\n", response="Old response.\n")
+        self.assertEqual(first["status"], "accepted")
+        (self.root / "RESEARCH_BRIEF.md").write_text(
+            "# Brief\nA new proposal with a different question.\n", encoding="utf-8",
+        )
+        events = list(self.git.events)
+        code = main(["reopen"], root=self.root, env=env)
+        self.assertEqual(code, 0)
+        self.assertEqual(self.git.events, events)
+        archive = self.root / "documents" / "rounds" / "001-accepted"
+        self.assertIn("Old manuscript.", (archive / "paper.md").read_text(encoding="utf-8"))
+        self.assertIn("Old response.", (archive / "response.md").read_text(encoding="utf-8"))
+        self.assertTrue((archive / "REMARK.md").is_file())
+        self.assertTrue((archive / "versions" / "v001" / "paper.md").is_file())
+        self.assertTrue((archive / "loop-state.json").is_file())
+        self.assertFalse((self.root / "documents" / "paper.md").exists())
+        self.assertFalse((self.root / "documents" / "response.md").exists())
+        self.assertFalse((self.root / "documents" / "REMARK.md").exists())
+        self.assertFalse((self.root / "documents" / "versions").exists())
+        self.assertEqual((self.root / "documents" / "raw-results.json").read_text(encoding="utf-8"), CANARY)
+        self.assertEqual((self.root / "campaign" / "run" / "data.json").read_text(encoding="utf-8"), CANARY)
+        self.assertEqual((self.root / "policy.json").read_text(encoding="utf-8"), '{"kept": true}\n')
+        self.assertTrue((self.root / "usage" / "api-usage.jsonl").is_file())
+        self.assertFalse((archive / "api-usage.jsonl").exists())
+        prompt = (ROOT / "loop" / "prompts" / "interactive_reopen.md").read_text(encoding="utf-8")
+        self.assertIn("bin/autoresearch reopen", prompt)
+        self.assertIn("sleep 600", prompt)
+        second = self._submit(http, "Second manuscript for the new proposal.\n")
+        self.assertEqual(second["status"], "accepted")
+        last = http.calls[-1]["body"].decode()
+        self.assertIn("Second manuscript for the new proposal.", last)
+        self.assertNotIn("Old manuscript.", last)
+        self.assertNotIn("Old response.", last)
+        self.assertTrue((self.root / "documents" / "versions" / "v001" / "paper.md").is_file())
+        fresh = json.loads((self.root / "documents" / "loop-state.json").read_text(encoding="utf-8"))
+        self.assertEqual(fresh["previous_round"], "documents/rounds/001-accepted")
+        self.assertEqual(fresh["brief_sha256"], hashlib.sha256(
+            (self.root / "RESEARCH_BRIEF.md").read_bytes()
+        ).hexdigest())
+        (self.root / "RESEARCH_BRIEF.md").write_text(
+            "# Brief\nA third question, still bounded.\n", encoding="utf-8",
+        )
+        again = reopen_campaign(self.root, config=cfg, env=env)
+        self.assertEqual(again["status"], "running")
+        self.assertEqual(again["reason"], "reopened after accepted; previous round is documents/rounds/002-accepted")
+        self.assertIn("Second manuscript", (self.root / "documents" / "rounds" / "002-accepted" / "paper.md").read_text(encoding="utf-8"))
+        self.assertIn("Old manuscript.", (archive / "paper.md").read_text(encoding="utf-8"))
+        held = reopen_campaign(self.root, config=cfg, env=env)
+        self.assertEqual(held["status"], "blocked")
+        self.assertIn("running", held["reason"])
+        self.assertFalse((self.root / "documents" / "rounds" / "003-running").exists())
+
+    def test_reopen_after_stall_archives_the_review(self):
+        http = HTTP(decisions=["revise"], progress=False)
+        cfg, env = self.config()
+        status = None
+        for number in range(1, 4):
+            status = self._submit(http, f"Manuscript version {number}. The claim stays fixed.\n")
+        self.assertEqual(status["status"], "stalled")
+        calls = len(http.calls)
+        (self.root / "RESEARCH_BRIEF.md").write_text("# Brief\nNarrow the question.\n", encoding="utf-8")
+        opened = reopen_campaign(self.root, config=cfg, env=env)
+        self.assertEqual(opened["status"], "running")
+        archive = self.root / "documents" / "rounds" / "001-stalled"
+        self.assertIn("Review text", (archive / "REVIEW.md").read_text(encoding="utf-8"))
+        self.assertTrue((archive / "progress" / "v003.json").is_file())
+        self.assertTrue((archive / "versions" / "v003" / "paper.md").is_file())
+        self.assertFalse((self.root / "documents" / "REVIEW.md").exists())
+        self.assertFalse((self.root / "documents" / "progress").exists())
+        self._submit(http, "A new manuscript after the stall.\n")
+        self.assertEqual(len(http.calls), calls + 1)
+        live = json.loads((self.root / "documents" / "loop-state.json").read_text(encoding="utf-8"))
+        self.assertEqual([item["n"] for item in live["versions"]], [1])
+        self.assertEqual(live["status"], "running")
+
+    def test_reopen_refusals_leave_the_round_in_place(self):
+        self.assertEqual(main(["reopen"], root=self.root, env={}), 2)
+        http = HTTP(decisions=["revise"])
+        cfg, env = self.config()
+        running = self._submit(http, "Still under review.\n")
+        self.assertEqual(running["status"], "running")
+        (self.root / "RESEARCH_BRIEF.md").write_text("# Brief\nChanged too early.\n", encoding="utf-8")
+        early = reopen_campaign(self.root, config=cfg, env=env)
+        self.assertEqual(early["status"], "blocked")
+        self.assertIn("running", early["reason"])
+        self.assertTrue((self.root / "documents" / "REVIEW.md").is_file())
+        self.assertFalse((self.root / "documents" / "rounds").exists())
+        state_path = self.root / "documents" / "loop-state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["status"] = "blocked"
+        state["reason"] = "git sync failed: example"
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        blocked = reopen_campaign(self.root, config=cfg, env=env)
+        self.assertEqual(blocked["status"], "blocked")
+        self.assertIn("blocked", blocked["reason"])
+        self.assertEqual(json.loads(state_path.read_text(encoding="utf-8"))["status"], "blocked")
+
+    def test_reopen_refuses_an_unchanged_or_incomplete_brief(self):
+        http = HTTP(decisions=["accept"])
+        cfg, env = self.config()
+        self._submit(http, "Accepted manuscript.\n")
+        same = reopen_campaign(self.root, config=cfg, env=env)
+        self.assertEqual(same["status"], "blocked")
+        self.assertIn("unchanged", same["reason"])
+        self.assertTrue((self.root / "documents" / "REMARK.md").is_file())
+        self.assertFalse((self.root / "documents" / "rounds").exists())
+        (self.root / "RESEARCH_BRIEF.md").write_text("# Brief\n[Question still blank]\n", encoding="utf-8")
+        incomplete = reopen_campaign(self.root, config=cfg, env=env)
+        self.assertEqual(incomplete["status"], "blocked")
+        self.assertIn("Brief incomplete", incomplete["reason"])
+        self.assertTrue((self.root / "documents" / "REMARK.md").is_file())
+        (self.root / "RESEARCH_BRIEF.md").write_text("# Brief\nA real new question.\n", encoding="utf-8")
+        staging = self.root / "documents" / "rounds" / ".staging-001-accepted"
+        staging.mkdir(parents=True)
+        leftover = reopen_campaign(self.root, config=cfg, env=env)
+        self.assertEqual(leftover["status"], "blocked")
+        self.assertIn(".staging", leftover["reason"])
+        self.assertTrue((self.root / "documents" / "REMARK.md").is_file())
+        self.assertFalse((self.root / "documents" / "rounds" / "001-accepted").exists())
+        state = json.loads((self.root / "documents" / "loop-state.json").read_text(encoding="utf-8"))
+        state["brief_sha256"] = None
+        (self.root / "documents" / "loop-state.json").write_text(json.dumps(state), encoding="utf-8")
+        staging.rmdir()
+        missing = reopen_campaign(self.root, config=cfg, env=env)
+        self.assertEqual(missing["status"], "blocked")
+        self.assertIn("pinned brief", missing["reason"])
+        self.assertTrue((self.root / "documents" / "REMARK.md").is_file())
+
+    def test_reopen_completes_an_archive_that_was_already_written(self):
+        http = HTTP(decisions=["accept"])
+        cfg, env = self.config()
+        self._submit(http, "Kept manuscript.\n")
+        state = json.loads((self.root / "documents" / "loop-state.json").read_text(encoding="utf-8"))
+        archive = self.root / "documents" / "rounds" / "001-accepted"
+        archive.mkdir(parents=True)
+        for name in ("paper.md", "REMARK.md", "loop-state.json"):
+            shutil.copy2(self.root / "documents" / name, archive / name)
+        shutil.copytree(self.root / "documents" / "versions", archive / "versions")
+        shutil.copytree(self.root / "documents" / "reviews", archive / "reviews")
+        manifest = {
+            "status": state["status"],
+            "reason": state.get("reason") or "",
+            "brief_sha256": state["brief_sha256"],
+            "versions": [item["n"] for item in state["versions"]],
+            "archived": ["loop-state.json", "paper.md", "REMARK.md", "versions/", "reviews/"],
+        }
+        (archive / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        (self.root / "RESEARCH_BRIEF.md").write_text("# Brief\nA different question.\n", encoding="utf-8")
+        events = list(self.git.events)
+        result = reopen_campaign(self.root, config=cfg, env=env)
+        self.assertEqual(result["status"], "running")
+        self.assertEqual(self.git.events, events)
+        names = sorted(path.name for path in (self.root / "documents" / "rounds").iterdir())
+        self.assertEqual(names, ["001-accepted"])
+        self.assertFalse((self.root / "documents" / "paper.md").exists())
+        self.assertFalse((self.root / "documents" / "REMARK.md").exists())
+        self.assertIn("Kept manuscript.", (archive / "paper.md").read_text(encoding="utf-8"))
+        fresh = json.loads((self.root / "documents" / "loop-state.json").read_text(encoding="utf-8"))
+        self.assertEqual(fresh["previous_round"], "documents/rounds/001-accepted")
+        self.assertEqual(fresh["versions"], [])
+        self.assertNotEqual(fresh["brief_sha256"], state["brief_sha256"])
+
+    def test_unattended_loop_does_not_adopt_a_new_brief(self):
+        http = HTTP(decisions=["accept"])
+        self.drive(Agent(["Finished paper."]), http)
+        (self.root / "RESEARCH_BRIEF.md").write_text("# Brief\nAnother question.\n", encoding="utf-8")
+        again = Agent(["Should stay stopped."])
+        result = self.drive(again, http)
+        self.assertEqual(result["status"], "accepted")
+        self.assertEqual(again.calls, 0)
+        self.assertFalse((self.root / "documents" / "rounds").exists())
 
     def test_git_skips_env_and_refuses_key_material(self):
         tmp = pathlib.Path(tempfile.mkdtemp(prefix="loop_git_"))

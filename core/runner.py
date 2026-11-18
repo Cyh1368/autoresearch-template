@@ -64,6 +64,6 @@ def cli():
  elif ns.command=='status': status()
  elif ns.command=='stop': stop()
  elif ns.command=='report': report()
- elif ns.command=='start': print('Interactive session: paste loop/prompts/interactive.md, stay in this process, and run bin/autoresearch submit when documents/paper.md is ready. Sleep 600, then read the review. The unattended alternative is bin/autoresearch loop.')
+ elif ns.command=='start': print('Interactive session: paste loop/prompts/interactive.md, stay in this process, and run bin/autoresearch submit when documents/paper.md is ready. Sleep 600, then read the review. After an accepted or stalled round, replace RESEARCH_BRIEF.md and paste loop/prompts/interactive_reopen.md. The unattended alternative is bin/autoresearch loop.')
  else: subprocess.run([sys.executable,str(ROOT/'examples/smoke_test/run.py')],check=True)
 if __name__=='__main__': cli()

@@ -18,3 +18,5 @@ Then run:
 sleep 600
 
 After the sleep, follow the last lines that submit printed. If it says the paper was accepted or the campaign stalled, stop. If it says to continue, read documents/REVIEW.md and do the next version in this same session. That file may be one review, or three reviews combined when the first reviewer accepted and the full panel did not. Address every review in the file.
+
+Stopping ends this round. When the human later replaces RESEARCH_BRIEF.md and pastes loop/prompts/interactive_reopen.md, follow that prompt. It runs bin/autoresearch reopen and starts the next round in this session.
