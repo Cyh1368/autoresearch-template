@@ -295,7 +295,7 @@ class _Lock:
         try:
             fcntl.flock(self.handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
-            raise LoopBlock("Another autoresearch loop is already running in this repository.") from exc
+            raise LoopBlock("Another autoresearch submit or loop is already running in this repository.") from exc
         return self
 
     def __exit__(self, *_args):
@@ -461,6 +461,115 @@ def run_loop(root, *, config=None, env=None, transport=None, run_agent=None, git
             state["reason"] = str(exc)
             save_state(root, cfg, state)
             print(f"Blocked: {exc}")
+            return _public(state)
+
+
+def _tell_agent(state):
+    """Print the next step for an interactive agent session."""
+    if state["status"] == "accepted":
+        print("Read documents/REMARK.md and stop.")
+        return
+    if state["status"] == "stalled":
+        print("Read documents/loop-state.json. This campaign is stalled. Stop.")
+        return
+    if state["status"] == "blocked":
+        print("Read documents/loop-state.json and stop. A person has to clear this block.")
+        return
+    print("Sleep 600 seconds, then read documents/REVIEW.md and continue.")
+
+
+def submit_manuscript(root, *, config=None, env=None, transport=None, git=None):
+    """Review the manuscript the interactive agent already wrote.
+
+    Does not start a research agent. The caller sleeps and then reads the files
+    this function names.
+    """
+    root = pathlib.Path(root)
+    cfg = config or load_config(root, env)
+    env = {} if env is None and config is not None else env
+    if git is None:
+        git = GitSync(root, remote=cfg.git_remote, enabled=cfg.git_enabled)
+    secret = key_name = None
+    provider = None
+
+    def client():
+        nonlocal secret, key_name, provider
+        if provider is None:
+            secret, key_name = require_api_key(cfg, env)
+            provider = Provider(cfg, secret, transport=transport)
+        return provider
+
+    with _Lock(root):
+        state = load_state(root, cfg)
+        if state["status"] == "blocked":
+            state["status"] = "running"
+            state["reason"] = ""
+            save_state(root, cfg, state)
+        if state["status"] in {"accepted", "stalled"}:
+            print(f"Stopped: {state['reason']}")
+            _tell_agent(state)
+            return _public(state)
+        try:
+            try:
+                pulled = git.pull()
+            except GitError as exc:
+                raise LoopBlock(f"git pull failed: {exc}") from exc
+            print(f"git pull: {pulled}")
+            state = load_state(root, cfg)
+            if state["status"] in {"accepted", "stalled"}:
+                print(f"Stopped: {state['reason']}")
+                _tell_agent(state)
+                return _public(state)
+            if state["status"] == "blocked":
+                state["status"] = "running"
+                state["reason"] = ""
+                save_state(root, cfg, state)
+            _check_brief(root, cfg, state)
+            stop = _scientific_stop(cfg, state)
+            if stop:
+                state["status"], state["reason"] = stop
+                save_state(root, cfg, state)
+                _sync(git, f"loop: {state['status']} version {state['versions'][-1]['n']}")
+                print(f"Stopped: {state['reason']}")
+                _tell_agent(state)
+                return _public(state)
+            if state["versions"] and state["versions"][-1].get("decision") is None:
+                _finish_open_review(root, cfg, state, client(), secret, key_name)
+                _close_version(root, cfg, state, git, client(), secret, key_name)
+            elif _needs_progress(cfg, state):
+                _progress_check(root, cfg, state, client(), secret, key_name)
+                _sync(git, f"loop: progress check version {state['versions'][-1]['n']}")
+            else:
+                manuscript = papers.load_manuscript(root, cfg)
+                if manuscript is None:
+                    raise LoopBlock(
+                        f"Write the manuscript to {cfg.paper_rel} before bin/autoresearch submit."
+                    )
+                if _unreviewed(state, manuscript):
+                    response_text, note = papers.view_for_model(
+                        manuscript, _previous_response_sha(state)
+                    )
+                    _review_version(
+                        root, cfg, state, client(), secret, key_name,
+                        manuscript, response_text, note,
+                    )
+                    _close_version(root, cfg, state, git, client(), secret, key_name)
+                else:
+                    last = state["versions"][-1]
+                    print(
+                        f"Version {last['n']} is already reviewed ({last.get('decision')}). "
+                        "No new strong-model call."
+                    )
+            if state["status"] in {"accepted", "stalled"}:
+                print(f"Stopped: {state['reason']}")
+            _tell_agent(state)
+            return _public(state)
+        except LoopBlock as exc:
+            state["status"] = "blocked"
+            state["reason"] = str(exc)
+            save_state(root, cfg, state)
+            print(f"Blocked: {exc}")
+            _tell_agent(state)
             return _public(state)
 
 

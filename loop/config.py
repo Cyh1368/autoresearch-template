@@ -1,4 +1,6 @@
 """Loop settings. Defaults are OpenRouter and GPT-6 Sol. Keys stay in the environment."""
+from __future__ import annotations
+
 import json, os, pathlib, shlex, urllib.parse
 from dataclasses import dataclass
 
@@ -376,11 +378,11 @@ def require_agent(cfg):
     argv = list(cfg.agent_argv)
     if not argv:
         raise LoopBlock(
-            "No research agent command is configured. Set agent.argv in loop.config.json "
-            "or AUTORESEARCH_AGENT_COMMAND. Example: "
-            "export AUTORESEARCH_AGENT_COMMAND='your-agent --prompt-file {prompt_file}'. "
-            "The command runs once per manuscript version and exits when documents/paper.md is ready. "
-            "This template does not assume a cluster or a particular agent."
+            "bin/autoresearch loop needs an agent command. The usual session does not: "
+            "paste loop/prompts/interactive.md into the coding agent and let it run "
+            "bin/autoresearch submit. For the unattended loop, set agent.argv in "
+            "loop.config.json or AUTORESEARCH_AGENT_COMMAND. Example: "
+            "export AUTORESEARCH_AGENT_COMMAND='your-agent --prompt-file {prompt_file}'."
         )
     joined = " ".join(argv)
     if cfg.prompt_via == "file" and "{prompt_file}" not in joined:

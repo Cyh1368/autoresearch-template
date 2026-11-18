@@ -1,8 +1,8 @@
-"""Errors the supervisor reports without a traceback."""
+"""Errors reported without a traceback."""
 
 
 class LoopBlock(ValueError):
-    """Stop the loop until a person fixes the recorded condition."""
+    """Stop submit, or the unattended loop, until a person fixes the recorded condition."""
 
 
 class ProviderError(ValueError):

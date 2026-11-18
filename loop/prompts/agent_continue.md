@@ -1,3 +1,5 @@
+This prompt is only for the unattended command `bin/autoresearch loop`. The usual session is interactive: a person pastes `loop/prompts/interactive.md` and the agent calls `bin/autoresearch submit`.
+
 Continue the existing research campaign. This process is version {next_version}. The newest review is at {review_path}:
 
 {review}

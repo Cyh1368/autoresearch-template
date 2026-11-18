@@ -4,7 +4,7 @@ import json, pathlib, shutil, subprocess, tempfile, unittest
 from loop.config import load_config
 from loop.errors import GitError, LoopBlock, ProviderError
 from loop.git_sync import GitSync
-from loop.orchestrator import run_loop
+from loop.orchestrator import run_loop, submit_manuscript
 from loop.parse import parse_decision, parse_json_object, parse_progress
 from loop.provider import Provider
 from loop.cli import main
@@ -374,6 +374,43 @@ class LoopTests(unittest.TestCase):
                 "AZURE_ENDPOINT": "https://example.openai.azure.com/openai/deployments/my-deployment/chat/completions",
             })
         self.assertIn("deployment name", str(legacy.exception))
+
+    def test_submit_reviews_the_manuscript_and_skips_a_repeat(self):
+        http = HTTP(decisions=["revise"])
+        (self.root / "documents" / "paper.md").write_text("Paper from the interactive agent.\n", encoding="utf-8")
+        cfg, env = self.config()
+        result = submit_manuscript(self.root, config=cfg, env=env, transport=http, git=self.git)
+        self.assertEqual(result["status"], "running")
+        self.assertEqual(len(http.calls), 1)
+        self.assertIn("Paper from the interactive agent.", bodies(http))
+        self.assertTrue((self.root / "documents" / "REVIEW.md").is_file())
+        self.assertFalse((self.root / "documents" / "REMARK.md").exists())
+        again = submit_manuscript(self.root, config=cfg, env=env, transport=http, git=self.git)
+        self.assertEqual(again["status"], "running")
+        self.assertEqual(len(http.calls), 1)
+
+    def test_submit_stalls_after_three_versions(self):
+        http = HTTP(decisions=["revise"], progress=False)
+        cfg, env = self.config()
+        status = None
+        for number in range(1, 4):
+            (self.root / "documents" / "paper.md").write_text(
+                f"Manuscript version {number}. The claim and the evidence stay fixed.\n",
+                encoding="utf-8",
+            )
+            status = submit_manuscript(self.root, config=cfg, env=env, transport=http, git=self.git)
+        self.assertEqual(status["status"], "stalled")
+        self.assertEqual(main(["submit"], root=self.root, env=env, transport=http), 3)
+        progress_calls = [call for call in http.calls if b"significant_progress" in call["body"]]
+        self.assertEqual(len(progress_calls), 1)
+
+    def test_submit_without_a_manuscript_blocks(self):
+        http = HTTP()
+        cfg, env = self.config()
+        result = submit_manuscript(self.root, config=cfg, env=env, transport=http, git=self.git)
+        self.assertEqual(result["status"], "blocked")
+        self.assertIn("paper.md", result["reason"])
+        self.assertEqual(http.calls, [])
 
     def test_fenced_json(self):
         parsed = parse_json_object('```json\n{"decision":"accepted","summary":"ok","review_markdown":"Full."}\n```')

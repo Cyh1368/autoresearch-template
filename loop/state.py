@@ -1,4 +1,4 @@
-"""Atomic supervisor state. Separate from the campaign policy and ledger."""
+"""Atomic review state for submit. Separate from the campaign policy and ledger."""
 import json, os, pathlib
 
 

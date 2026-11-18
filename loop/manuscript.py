@@ -61,7 +61,7 @@ def snapshot(root, cfg, number, manuscript, response_text, note):
     if dest.exists():
         raise LoopBlock(
             f"{dest} already exists. Refusing to overwrite a manuscript version. "
-            "Remove documents/loop-state.json together with documents/versions only when restarting the loop."
+            "Remove documents/loop-state.json together with documents/versions only when restarting the run."
         )
     dest.mkdir(parents=True)
     (dest / "paper.md").write_text(manuscript.paper, encoding="utf-8")
