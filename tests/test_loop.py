@@ -323,11 +323,57 @@ class LoopTests(unittest.TestCase):
         ]).text, "gemini-ok")
         self.assertNotIn("AIza-secret", grab.seen[1])
         self.assertEqual(grab.seen[2]["x-goog-api-key"], "AIza-secret")
+        azure = load_config(self.root, {
+            "AUTORESEARCH_PROVIDER": "azure",
+            "AUTORESEARCH_MODEL": "gpt-deploy",
+            "AZURE_ENDPOINT": "https://example.openai.azure.com/",
+        })
+        self.assertEqual(azure.strong.wire, "azure")
+        self.assertEqual(azure.strong.api_key_env, "AZURE_API_KEY")
+        self.assertEqual(azure.strong.base_url, "https://example.openai.azure.com/openai/v1")
+        self.assertIsNone(azure.strong.key_usage_path)
+        self.assertEqual(Provider(azure, "azure-secret", transport=grab).complete([
+            {"role": "user", "content": "hi"}
+        ]).text, "openai-ok")
+        self.assertEqual(grab.seen[1], "https://example.openai.azure.com/openai/v1/chat/completions")
+        self.assertEqual(grab.seen[2]["api-key"], "azure-secret")
+        self.assertNotIn("Authorization", grab.seen[2])
+        self.assertEqual(grab.seen[3]["model"], "gpt-deploy")
+        self.assertNotIn("azure-secret", grab.seen[1])
         with self.assertRaises(ProviderError) as caught:
             Provider(cfg, SECRET, transport=lambda *args: (401, {}, SECRET.encode())).complete(
                 [{"role": "user", "content": "hi"}]
             )
         self.assertNotIn(SECRET, str(caught.exception))
+
+    def test_azure_endpoint_and_deployment_name(self):
+        kept = load_config(self.root, {
+            "AUTORESEARCH_PROVIDER": "azure",
+            "AUTORESEARCH_MODEL": "my-deployment",
+            "AZURE_ENDPOINT": "https://example.openai.azure.com/openai/v1/",
+        })
+        self.assertEqual(kept.strong.base_url, "https://example.openai.azure.com/openai/v1")
+        shutil.copy(ROOT / "loop.config.example.json", self.root / "loop.config.json")
+        with self.assertRaises(LoopBlock) as slug:
+            load_config(self.root, {
+                "AUTORESEARCH_PROVIDER": "azure",
+                "AZURE_ENDPOINT": "https://example.openai.azure.com",
+            })
+        self.assertIn("AUTORESEARCH_MODEL", str(slug.exception))
+        with self.assertRaises(LoopBlock) as missing:
+            load_config(self.root, {
+                "AUTORESEARCH_PROVIDER": "azure",
+                "AUTORESEARCH_MODEL": "my-deployment",
+            })
+        self.assertIn("AZURE_ENDPOINT", str(missing.exception))
+        self.assertNotIn("sk-", str(missing.exception))
+        with self.assertRaises(LoopBlock) as legacy:
+            load_config(self.root, {
+                "AUTORESEARCH_PROVIDER": "azure",
+                "AUTORESEARCH_MODEL": "my-deployment",
+                "AZURE_ENDPOINT": "https://example.openai.azure.com/openai/deployments/my-deployment/chat/completions",
+            })
+        self.assertIn("deployment name", str(legacy.exception))
 
     def test_fenced_json(self):
         parsed = parse_json_object('```json\n{"decision":"accepted","summary":"ok","review_markdown":"Full."}\n```')

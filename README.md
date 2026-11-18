@@ -112,7 +112,9 @@ The instructions the supervisor sends are `loop/prompts/review.md`, `loop/prompt
 
 Settings resolve in this order: built-in defaults, the provider preset, fields in the config file that belong to the selected provider, then environment variables. `AUTORESEARCH_LOOP_CONFIG` selects a file. Otherwise the supervisor reads `loop.config.json` when that file exists.
 
-`AUTORESEARCH_PROVIDER` can switch provider. A switch keeps `model`, `timeout_seconds`, and `max_tokens` from the file, and takes the new preset's base URL and key variable. `AUTORESEARCH_MODEL`, `AUTORESEARCH_BASE_URL`, and `AUTORESEARCH_API_KEY_ENV` apply after that. Anthropic and Gemini reject the OpenRouter slug `openai/gpt-6-sol` until you set a model for that provider. `openai-compatible` has no default URL or key variable: set `base_url`, `model`, and `api_key_env`.
+`AUTORESEARCH_PROVIDER` can switch provider. A switch keeps `model`, `timeout_seconds`, and `max_tokens` from the file, and takes the new preset's base URL and key variable. `AUTORESEARCH_MODEL`, `AUTORESEARCH_BASE_URL`, and `AUTORESEARCH_API_KEY_ENV` apply after that. Anthropic, Gemini, and Azure reject the OpenRouter slug `openai/gpt-6-sol` until you set a model for that provider. `openai-compatible` has no default URL or key variable: set `base_url`, `model`, and `api_key_env`.
+
+`azure` reads the resource URL from `AZURE_ENDPOINT` and the key from `AZURE_API_KEY`. A resource URL such as `https://YOUR-RESOURCE.openai.azure.com` is called at `https://YOUR-RESOURCE.openai.azure.com/openai/v1/chat/completions`. An endpoint that already ends in `/openai/v1` is used as given. `strong_model.model` or `AUTORESEARCH_MODEL` is the Azure deployment name. The request sends that key in the `api-key` header. `AUTORESEARCH_BASE_URL` still overrides `AZURE_ENDPOINT` when both are set.
 
 | Provider | Request | Key variable | Live key usage |
 | --- | --- | --- | --- |
@@ -120,6 +122,7 @@ Settings resolve in this order: built-in defaults, the provider preset, fields i
 | `openai` | OpenAI chat completions | `OPENAI_API_KEY` | local ledger only |
 | `anthropic` | `POST /v1/messages`, header `anthropic-version: 2023-06-01` | `ANTHROPIC_API_KEY` | local ledger only |
 | `gemini` | `generateContent` | `GEMINI_API_KEY` | local ledger only |
+| `azure` | OpenAI chat completions at `{AZURE_ENDPOINT}/openai/v1`, header `api-key` | `AZURE_API_KEY` | local ledger only |
 | `openai-compatible` | OpenAI chat completions at your `base_url` | the variable you name | set `key_usage_path` to enable |
 
 The OpenRouter call sends `X-Title: autoresearch-template`. The model timeout defaults to 900 seconds. `max_tokens` is omitted for OpenAI-compatible calls unless you set it. Anthropic always sends `max_tokens`, and uses 16000 when you leave it unset.
@@ -132,7 +135,9 @@ Environment variables:
 | --- | --- |
 | `OPENROUTER_API_KEY` | Default reviewer key. |
 | `AUTORESEARCH_API_KEY` | Used instead of the named key variable. |
-| `AUTORESEARCH_PROVIDER` | `openrouter`, `openai`, `anthropic`, `gemini`, or `openai-compatible`. |
+| `AUTORESEARCH_PROVIDER` | `openrouter`, `openai`, `anthropic`, `gemini`, `azure`, or `openai-compatible`. |
+| `AZURE_ENDPOINT` | Azure resource URL when the provider is `azure`. |
+| `AZURE_API_KEY` | Azure key. Used when the provider is `azure`. |
 | `AUTORESEARCH_MODEL` | Model id. |
 | `AUTORESEARCH_BASE_URL` | API base URL. |
 | `AUTORESEARCH_API_KEY_ENV` | Name of the environment variable that holds the key. |
@@ -220,7 +225,7 @@ Obtain a Bouchet agent-partition session under the current [YCRC Bouchet documen
 
 - `tests/test_smoke.py`: the offline demo exits 0.
 - `tests/test_lifecycle.py`: drives a campaign against an isolated copy of the template. Incomplete briefs and invalid policies are rejected. `init`, `status`, `report`, and `stop` behave. Editing the brief after `init` is blocked. The `research-job` guards fire: local unauthorized, no allocation, and Slurm refused. Real local execution runs only when the tests themselves are inside a Slurm allocation.
-- `tests/test_loop.py`: a fake agent and a fake HTTP transport cover the OpenRouter and GPT-6 Sol defaults, manuscript-only requests, accept and stall, usage redaction, the three provider wires, and git refusal of `.env` and key material.
+- `tests/test_loop.py`: a fake agent and a fake HTTP transport cover the OpenRouter and GPT-6 Sol defaults, manuscript-only requests, accept and stall, usage redaction, the provider wires (including Azure), and git refusal of `.env` and key material.
 
 ## Resource and safety rules
 

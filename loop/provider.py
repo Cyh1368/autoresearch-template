@@ -122,6 +122,8 @@ class Provider:
             })
         if self.cfg.wire == "gemini":
             return self._headers({"x-goog-api-key": self._key})
+        if self.cfg.wire == "azure":
+            return self._headers({"api-key": self._key})
         return self._headers({"Authorization": "Bearer " + self._key})
 
     def _usage_from(self, usage):

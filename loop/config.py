@@ -1,5 +1,5 @@
 """Loop settings. Defaults are OpenRouter and GPT-6 Sol. Keys stay in the environment."""
-import json, os, pathlib, shlex
+import json, os, pathlib, shlex, urllib.parse
 from dataclasses import dataclass
 
 from loop.errors import LoopBlock
@@ -41,6 +41,12 @@ PRESETS = {
         "wire": "openai",
         "base_url": None,
         "api_key_env": None,
+        "key_usage_path": None,
+    },
+    "azure": {
+        "wire": "azure",
+        "base_url": None,
+        "api_key_env": "AZURE_API_KEY",
         "key_usage_path": None,
     },
 }
@@ -177,6 +183,37 @@ def _as_argv(value):
     raise LoopBlock("agent.argv must be a list of strings or a command string")
 
 
+def azure_chat_base(endpoint):
+    """Normalize an Azure resource URL to the v1 chat base.
+
+    https://YOUR-RESOURCE.openai.azure.com becomes
+    https://YOUR-RESOURCE.openai.azure.com/openai/v1. A URL that already ends
+    in /openai/v1 is kept. The deployment name is the model, not part of the URL.
+    """
+    parts = urllib.parse.urlsplit(endpoint.strip())
+    if parts.scheme not in {"http", "https"} or not parts.netloc:
+        raise LoopBlock(
+            "AZURE_ENDPOINT must be an http(s) URL, such as "
+            "https://YOUR-RESOURCE.openai.azure.com."
+        )
+    path = parts.path.rstrip("/")
+    if path.endswith("/chat/completions"):
+        path = path[: -len("/chat/completions")].rstrip("/")
+    if "/openai/deployments/" in path:
+        raise LoopBlock(
+            "AZURE_ENDPOINT should be the resource URL, such as "
+            "https://YOUR-RESOURCE.openai.azure.com. "
+            "Put the deployment name in strong_model.model or AUTORESEARCH_MODEL."
+        )
+    if path.endswith("/openai/v1"):
+        pass
+    elif path.endswith("/openai"):
+        path = path + "/v1"
+    elif path in {"", "/"}:
+        path = "/openai/v1"
+    return urllib.parse.urlunsplit((parts.scheme, parts.netloc, path, "", "")).rstrip("/")
+
+
 def _positive_int(value, name):
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise LoopBlock(f"{name} must be a positive integer")
@@ -192,7 +229,7 @@ def _strong_settings(file_cfg, env):
     if provider not in PRESETS:
         raise LoopBlock(
             "unknown provider " + provider
-            + ". Use openrouter, openai, anthropic, gemini, or openai-compatible."
+            + ". Use openrouter, openai, anthropic, gemini, azure, or openai-compatible."
         )
     preset = PRESETS[provider]
     strong = dict(default_tree()["strong_model"])
@@ -223,7 +260,7 @@ def _strong_settings(file_cfg, env):
             "Set strong_model.model or AUTORESEARCH_MODEL."
         )
     if (
-        provider in {"anthropic", "gemini"}
+        provider in {"anthropic", "gemini", "azure"}
         and strong.get("model") == DEFAULT_MODEL
         and not env.get("AUTORESEARCH_MODEL", "").strip()
     ):
@@ -231,8 +268,17 @@ def _strong_settings(file_cfg, env):
             f"{DEFAULT_MODEL} is the OpenRouter slug for GPT-6 Sol. "
             f"Set strong_model.model or AUTORESEARCH_MODEL for provider {provider}."
         )
-    if strong.get("wire") not in {"openai", "anthropic", "gemini"}:
-        raise LoopBlock("wire must be openai, anthropic, or gemini")
+    if provider == "azure":
+        endpoint = str(strong.get("base_url") or "").strip() or env.get("AZURE_ENDPOINT", "").strip()
+        if not endpoint:
+            raise LoopBlock(
+                "Set AZURE_ENDPOINT to the Azure resource URL, such as "
+                "https://YOUR-RESOURCE.openai.azure.com. "
+                "The key is read from AZURE_API_KEY."
+            )
+        strong["base_url"] = azure_chat_base(endpoint)
+    if strong.get("wire") not in {"openai", "anthropic", "gemini", "azure"}:
+        raise LoopBlock("wire must be openai, anthropic, gemini, or azure")
     return provider, strong
 
 
